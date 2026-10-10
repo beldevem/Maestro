@@ -10,6 +10,7 @@ This covers Phases 0 to 3 of the plan: the board, worker agents, agent states, c
 - **Templates** for new projects (Node.js API in TypeScript, Angular app, Python) fill the quality gates, allowed commands and best practices; you can edit both after.
 - **Tickets** live in the project's PM tool: Jira, Trello, or Maestro itself when you have no PM tool. You can create tickets from the board.
 - **Workflow config** per project (YAML): base branch, branch naming, commit convention, Definition of Ready, quality gates, fix attempts and Definition of Done.
+- **Docker sandbox for quality gates** (optional, off by default): with `sandbox.type: docker` in the workflow, each gate runs in a throwaway container from `sandbox.image`, with the worktree mounted, your user id, and optionally no network.
 - **Worker agents** run on the Claude Agent SDK. Each ticket gets its own git worktree. When you assign a ticket, the worker:
   1. checks the Definition of Ready, then creates a branch from the latest base branch;
   2. implements the ticket;

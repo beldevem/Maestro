@@ -24,6 +24,11 @@ quality_gates:                     # run in order in the ticket's worktree
 gate_timeout_minutes: 15
 max_fix_attempts: 3
 
+sandbox:
+  type: none                       # docker: run the quality gates in a container (needs Docker)
+  image: node:24
+  network: true                    # false: no network inside the container (install gates then need a cache)
+
 allowed_commands:                  # extra shell commands agents may run while coding
   - npm run
   - npx
@@ -65,6 +70,13 @@ export const workflowSchema = z.object({
   quality_gates: z.array(gateSchema).default([]),
   gate_timeout_minutes: z.number().positive().default(15),
   max_fix_attempts: z.number().int().min(0).default(3),
+  sandbox: z
+    .object({
+      type: z.enum(['none', 'docker']).default('none'),
+      image: z.string().min(1).default('node:24'),
+      network: z.boolean().default(true),
+    })
+    .default({ type: 'none', image: 'node:24', network: true }),
   allowed_commands: z.array(z.string()).default([]),
   definition_of_done: z.array(z.string()).default([]),
   pull_request: z.object({ draft: z.boolean().default(true) }).default({ draft: true }),
