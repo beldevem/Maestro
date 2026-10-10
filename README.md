@@ -7,6 +7,7 @@ This covers Phases 0 to 3 of the plan: the board, worker agents, agent states, c
 ## What works now
 
 - **Projects** linked to a GitHub, GitLab (cloud or self-managed) or Bitbucket Cloud repo, or a local git folder. Each project has its own context, requirements and best practices, which every agent reads.
+- **Templates** for new projects (Node.js API in TypeScript, Angular app, Python) fill the quality gates, allowed commands and best practices; you can edit both after.
 - **Tickets** live in the project's PM tool: Jira, Trello, or Maestro itself when you have no PM tool. You can create tickets from the board.
 - **Workflow config** per project (YAML): base branch, branch naming, commit convention, Definition of Ready, quality gates, fix attempts and Definition of Done.
 - **Worker agents** run on the Claude Agent SDK. Each ticket gets its own git worktree. When you assign a ticket, the worker:

@@ -18,6 +18,7 @@ import { NotReadyError, Orchestrator } from './orchestrator.js';
 import { git } from './proc.js';
 import { budgetState, dailyCap, startOfToday, usd } from './budget.js';
 import { readBaseMemory } from './memory.js';
+import { TEMPLATES, templateById, workflowFor } from './templates.js';
 import { computeMetrics } from './metrics.js';
 import { KNOWN_SECRETS, type SecretStore } from './secrets.js';
 import type { Agent } from './types.js';
@@ -53,6 +54,8 @@ const projectSchema = z.object({
   requirements: z.string().default(''),
   bestPractices: z.string().default(''),
   workflowYaml: z.string().optional(),
+  /** Fills the workflow gates, best practices and context that were left empty. */
+  template: z.string().optional(),
 });
 const ticketSchema = z.object({
   title: z.string().min(1),
@@ -158,8 +161,16 @@ export async function buildServer(d: ServerDeps): Promise<FastifyInstance> {
 
   // Projects
   app.get('/api/projects', async () => d.store.listProjects());
+  app.get('/api/templates', async () => TEMPLATES.map(({ id, name, description, bestPractices, gates }) => ({ id, name, description, bestPractices, gates })));
   app.post('/api/projects', async (req) => {
-    const body = projectSchema.parse(req.body);
+    const { template: templateId, ...body } = projectSchema.parse(req.body);
+    const template = templateById(templateId);
+    if (templateId && !template) throw new Error(`Unknown template "${templateId}".`);
+    if (template) {
+      body.workflowYaml ||= workflowFor(template);
+      body.bestPractices ||= template.bestPractices;
+      body.context ||= template.context;
+    }
     if (body.workflowYaml) {
       const v = validateWorkflow(body.workflowYaml);
       if (!v.ok) throw new Error(`Workflow config: ${v.error}`);
@@ -172,7 +183,7 @@ export async function buildServer(d: ServerDeps): Promise<FastifyInstance> {
     // partial() still fills in defaults, so keep only the fields the request sent; otherwise saving one tab resets the others.
     const sent = Object.keys((req.body ?? {}) as object);
     const patch = Object.fromEntries(
-      Object.entries(projectSchema.partial().parse(req.body)).filter(([k]) => sent.includes(k)),
+      Object.entries(projectSchema.partial().parse(req.body)).filter(([k]) => sent.includes(k) && k !== 'template'),
     ) as Partial<z.infer<typeof projectSchema>>;
     if (patch.workflowYaml !== undefined) {
       const v = validateWorkflow(patch.workflowYaml);

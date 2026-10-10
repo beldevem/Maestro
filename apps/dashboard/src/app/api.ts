@@ -1,5 +1,5 @@
 import { Injectable } from '@angular/core';
-import type { Agent, Alert, BacklogDraft, ChatAction, Metrics, ProjectSpend, BacklogItem, Project, PullRequestRow, Review, ReviewComment, Run, RunEvent, SecretInfo, Ticket, TicketStatus } from './models';
+import type { Agent, Alert, BacklogDraft, ChatAction, Metrics, ProjectTemplate, ProjectSpend, BacklogItem, Project, PullRequestRow, Review, ReviewComment, Run, RunEvent, SecretInfo, Ticket, TicketStatus } from './models';
 
 export class ApiError extends Error {
   constructor(message: string, readonly status: number, readonly reasons: string[] = []) {
@@ -22,7 +22,8 @@ export class Api {
 
   projects = () => this.call<Project[]>('GET', '/projects');
   project = (id: string) => this.call<Project>('GET', `/projects/${id}`);
-  createProject = (p: Partial<Project>) => this.call<Project>('POST', '/projects', p);
+  templates = () => this.call<ProjectTemplate[]>('GET', '/templates');
+  createProject = (p: Partial<Project> & { template?: string }) => this.call<Project>('POST', '/projects', p);
   updateProject = (id: string, p: Partial<Project>) => this.call<Project>('PATCH', `/projects/${id}`, p);
   deleteProject = (id: string) => this.call('DELETE', `/projects/${id}`);
   checkProject = (id: string) => this.call<Record<string, { ok: boolean; message: string }>>('POST', `/projects/${id}/check`, {});

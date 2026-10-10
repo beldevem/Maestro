@@ -164,6 +164,14 @@ export interface Alert {
   createdAt: string;
 }
 
+export interface ProjectTemplate {
+  id: string;
+  name: string;
+  description: string;
+  bestPractices: string;
+  gates: { name: string; run: string }[];
+}
+
 export interface ProjectSpend {
   projectId: string;
   name: string;
