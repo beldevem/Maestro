@@ -87,7 +87,7 @@ export function parseVerdict(structured: unknown, text: string): Omit<ReviewResu
 
 export async function runReviewer(
   agent: CodingAgent,
-  task: Pick<AgentTask, 'cwd' | 'model' | 'env' | 'signal' | 'onMessage'>,
+  task: Pick<AgentTask, 'cwd' | 'model' | 'env' | 'signal' | 'onMessage' | 'maxBudgetUsd'>,
   project: Project,
   wf: Workflow,
   ticket: Ticket,

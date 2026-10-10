@@ -4,7 +4,8 @@ export type BusEvent =
   | { type: 'agent'; agent: unknown }
   | { type: 'run'; run: unknown }
   | { type: 'run_event'; event: unknown }
-  | { type: 'review'; review: unknown };
+  | { type: 'review'; review: unknown }
+  | { type: 'alert'; alert: unknown };
 
 class Bus extends EventEmitter {
   publish(e: BusEvent): void {

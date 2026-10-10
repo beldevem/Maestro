@@ -37,8 +37,21 @@ import type { SecretInfo } from '../models';
       <label>Reviewer model <input [(ngModel)]="settings['model.reviewer']" name="mr" /></label>
       <label>Tickets worked on at once <input type="number" min="1" [(ngModel)]="settings['maxConcurrentRuns']" name="mc" /></label>
       <label>Budget per run, USD <input type="number" min="0" step="0.5" [(ngModel)]="settings['budget.perRunUsd']" name="bud" /></label>
+      <label>Daily budget per project, USD (0 = no limit) <input type="number" min="0" step="1" [(ngModel)]="settings['budget.projectDailyUsd']" name="daily" /></label>
+      <p class="hint">A run stops when it has spent its budget. When a project reaches its daily budget (set one per project on its Runs tab), nothing new starts and auto-assign pauses until tomorrow.</p>
       <button class="primary" type="submit">Save</button>
     </form>
+
+    <section class="panel">
+      <h2>Desktop notifications</h2>
+      <p class="hint">Get a notification from this browser when an agent is blocked, a run fails, a budget is reached or a change is ready for review.</p>
+      @if (notifySupported) {
+        <label class="toggle"><input type="checkbox" [checked]="notify()" (change)="setNotify($any($event.target).checked)" /> Notify me on this computer</label>
+        @if (notifyDenied()) { <p class="warn">The browser blocks notifications for this page; allow them in the site settings.</p> }
+      } @else {
+        <p class="muted">This browser does not support notifications.</p>
+      }
+    </section>
   `,
 })
 export class SettingsPage {
@@ -46,6 +59,30 @@ export class SettingsPage {
   readonly secrets = signal<SecretInfo[]>([]);
   readonly notice = signal('');
   settings: Record<string, string> = {};
+  readonly notifySupported = typeof Notification !== 'undefined';
+  readonly notify = signal(this.notifySupported && this.readNotify() && Notification.permission === 'granted');
+  readonly notifyDenied = signal(this.notifySupported && Notification.permission === 'denied');
+
+  private readNotify(): boolean {
+    try {
+      return localStorage.getItem('maestro.notify') === '1';
+    } catch {
+      return false;
+    }
+  }
+
+  async setNotify(on: boolean): Promise<void> {
+    const permission = on && Notification.permission !== 'granted' ? await Notification.requestPermission() : Notification.permission;
+    const enabled = on && permission === 'granted';
+    try {
+      localStorage.setItem('maestro.notify', enabled ? '1' : '0');
+    } catch {
+      // Private windows may refuse storage; the toggle then lasts for this page only.
+    }
+    this.notify.set(enabled);
+    this.notifyDenied.set(permission === 'denied');
+    if (enabled) new Notification('Maestro', { body: 'Notifications are on.' });
+  }
   values: Record<string, string> = {};
 
   constructor() {

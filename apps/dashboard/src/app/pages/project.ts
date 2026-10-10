@@ -4,7 +4,7 @@ import { FormsModule } from '@angular/forms';
 import { Router, RouterLink } from '@angular/router';
 import { Api, ApiError } from '../api';
 import { Live } from '../live';
-import { RUN_LABEL, STATUS_LABEL, type BacklogDraft, type ChatAction, type ChatMessage, type Project, type Ticket, type TicketStatus } from '../models';
+import { RUN_LABEL, STATUS_LABEL, type BacklogDraft, type ChatAction, type ChatMessage, type ProjectSpend, type Project, type Ticket, type TicketStatus } from '../models';
 import { BacklogDraftPanel } from './backlog-draft';
 import { ConnectorFields } from './connector-fields';
 
@@ -128,6 +128,15 @@ type Tab = 'board' | 'knowledge' | 'workflow' | 'runs' | 'chat' | 'connectors';
         }
 
         @case ('runs') {
+          <form class="toolbar" (ngSubmit)="saveBudget()">
+            <label>Daily budget for this project, USD
+              <input type="number" min="0" step="1" [(ngModel)]="budgetText" name="budget" placeholder="Default from Settings" />
+            </label>
+            <button type="submit">Save budget</button>
+            @if (spend(); as s) {
+              <span class="meta">Spent today \${{ s.today | number: '1.2-2' }}{{ s.dailyCap > 0 ? ' of $' + (s.dailyCap | number: '1.0-2') : ', no limit' }} · 7 days \${{ s.last7Days | number: '1.2-2' }} · all time \${{ s.total | number: '1.2-2' }}</span>
+            }
+          </form>
           @if (projectRuns().length === 0) { <p class="empty">No runs yet. Assign a ticket on the board.</p> }
           <table class="table">
             <thead><tr><th>Ticket</th><th>Status</th><th>Branch</th><th>Fix tries</th><th>Cost</th><th>Started</th><th></th></tr></thead>
@@ -233,6 +242,8 @@ export class ProjectPage {
   readonly planError = signal('');
   readonly draft = signal<BacklogDraft | null>(null);
   readonly memoryPending = signal(false);
+  readonly spend = signal<ProjectSpend | null>(null);
+  budgetText: number | null = null;
   memoryText = '';
   newTicket = { title: '', description: '', acceptanceCriteria: '', size: '', labels: '' };
   question = '';
@@ -252,6 +263,7 @@ export class ProjectPage {
       void this.loadTickets();
       void this.loadDraft();
       void this.loadMemory();
+      void this.loadSpend();
       void this.api.autoAssign(id).then((a) => this.autoAssign.set(a.enabled));
     });
     // Auto-assign moves tickets on its own; keep the board in step with runs starting and finishing.
@@ -261,6 +273,23 @@ export class ProjectPage {
       if (seen && sig !== seen) void this.loadTickets();
       seen = sig;
     });
+  }
+
+  async loadSpend(): Promise<void> {
+    const s = (await this.api.spend().catch(() => [])).find((x) => x.projectId === this.id()) ?? null;
+    this.spend.set(s);
+    this.budgetText = s?.ownCap ? s.dailyCap : null;
+  }
+
+  async saveBudget(): Promise<void> {
+    const value = this.budgetText === null || String(this.budgetText) === '' ? null : Number(this.budgetText);
+    try {
+      await this.api.setProjectBudget(this.id(), value);
+      await this.loadSpend();
+      this.flash(value === null ? 'This project uses the default daily budget.' : 'Budget saved.');
+    } catch (e) {
+      this.flash((e as Error).message);
+    }
   }
 
   async loadMemory(): Promise<void> {

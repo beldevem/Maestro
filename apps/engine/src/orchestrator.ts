@@ -13,7 +13,8 @@ import { runGates, type GateResult } from './gates.js';
 import { appendLearnings, extractLearnings, MEMORY_FILE, readMemoryFile, writeMemoryFile } from './memory.js';
 import { git } from './proc.js';
 import type { SecretStore } from './secrets.js';
-import type { Agent, AgentState, Project, Review, ReviewComment, Run, RunEventKind, Ticket } from './types.js';
+import { budgetState, perRunCap, startOfToday, usd } from './budget.js';
+import type { Agent, AgentState, AlertKind, Project, Review, ReviewComment, Run, RunEventKind, SpendKind, Ticket } from './types.js';
 import { blockedBy, branchName, checkReady, commitMessage, parseWorkflow, ticketArea, type Workflow } from './workflow.js';
 
 export interface OrchestratorDeps {
@@ -87,6 +88,8 @@ export class Orchestrator {
 
     const reasons = checkReady(wf, ticket);
     if (reasons.length && !opts.force) throw new NotReadyError(reasons);
+    const budget = budgetState(store, projectId);
+    if (budget.over) throw new Error(`${project.name} has reached its daily budget of ${usd(budget.cap)}. Raise it on the Runs tab or wait until tomorrow.`);
     if (this.active.size >= this.maxConcurrent()) throw new Error(`Already running ${this.active.size} tickets, the limit in Settings.`);
     if (store.listRuns(projectId).some((r) => r.ticketKey === ticketKey && r.status === 'running')) {
       throw new Error(`${ticketKey} is already being worked on.`);
@@ -174,6 +177,13 @@ export class Orchestrator {
     const wf = parseWorkflow(project.workflowYaml);
     if (!this.autoAssignEnabled(project, wf)) return [];
     const { max_parallel, one_per_area, dependency_ready_when } = wf.orchestration;
+    const budget = budgetState(store, project.id);
+    if (budget.over) {
+      if (!store.hasAlertSince(project.id, 'budget', startOfToday())) {
+        this.alert(project.id, null, 'budget', `${project.name} reached its daily budget of ${usd(budget.cap)}; auto-assign is paused until tomorrow.`);
+      }
+      return [];
+    }
 
     const running = store.listRuns(project.id).filter((r) => r.status === 'running');
     let slots = Math.min(max_parallel - running.length, this.maxConcurrent() - this.active.size, this.freeWorkers());
@@ -289,6 +299,11 @@ export class Orchestrator {
     let summary = '';
 
     for (;;) {
+      const over = this.budgetStop(ctx);
+      if (over) {
+        this.block(ctx, over, `Budget reached on ${ticket.key}`, 'budget');
+        return null;
+      }
       const what = addressing ? 'Addressing review on' : tries === 0 ? 'On' : 'Fixing';
       this.setAgent(agent.id, addressing ? 'addressing_review' : 'working', ctx.runId, `${what} ${ticket.key}${tries ? `, try ${tries}` : ''}`);
       const outcome = await this.d.agent.run({
@@ -300,7 +315,7 @@ export class Orchestrator {
         resume: this.run(ctx).sessionId ?? undefined,
         env: ctx.env,
         signal,
-        maxBudgetUsd: Number(store.getSetting('budget.perRunUsd') ?? 0) || undefined,
+        maxBudgetUsd: this.budgetLeft(ctx),
         onMessage: (m) => this.log(ctx.runId, m.kind === 'tool' ? 'tool' : 'agent', m.text),
       });
       this.addCost(ctx, outcome.costUsd);
@@ -372,6 +387,11 @@ export class Orchestrator {
     if (!wf.review.enabled) return this.toInReview(ctx);
 
     for (let round = 1; ; round++) {
+      const over = this.budgetStop(ctx);
+      if (over) {
+        this.log(ctx.runId, 'info', `${over} Skipping the reviewer agent; this waits for your review.`);
+        return this.toInReview(ctx);
+      }
       this.publishRun(store.updateRun(ctx.runId, { status: 'reviewing' })!);
       this.setAgent(agent.id, 'waiting_review', ctx.runId, `Waiting for review of ${ticket.key}`);
       this.log(ctx.runId, 'info', 'The reviewer agent is reviewing the change.');
@@ -381,18 +401,18 @@ export class Orchestrator {
         result = await runReviewer(
           this.d.agent,
           {
-            cwd: ctx.worktree, model: store.getSetting('model.reviewer') || 'claude-opus-5-5', env: ctx.env, signal,
+            cwd: ctx.worktree, model: store.getSetting('model.reviewer') || 'claude-opus-5-5', env: ctx.env, signal, maxBudgetUsd: this.budgetLeft(ctx),
             onMessage: (m) => m.kind === 'agent' && this.log(ctx.runId, 'agent', `Reviewer: ${m.text}`),
           },
           project, wf, ticket, this.run(ctx).baseRef ?? wf.base_branch, readMemoryFile(ctx.worktree),
         );
       } catch (e) {
         if (signal.aborted) throw e;
-        this.addCost(ctx, (e as { costUsd?: number }).costUsd ?? 0);
+        this.addCost(ctx, (e as { costUsd?: number }).costUsd ?? 0, 'reviewer');
         this.log(ctx.runId, 'error', `The reviewer agent failed, so this waits for your review: ${(e as Error).message}`);
         return this.toInReview(ctx);
       }
-      this.addCost(ctx, result.costUsd);
+      this.addCost(ctx, result.costUsd, 'reviewer');
       const review = store.addReview({
         runId: ctx.runId, source: 'agent', verdict: result.verdict, summary: result.summary, comments: result.comments,
         costUsd: result.costUsd, addressed: result.verdict === 'approve',
@@ -445,11 +465,14 @@ export class Orchestrator {
 
   /** Waiting for you (or the PR). The worker is free for other tickets meanwhile. */
   private toInReview(ctx: RunCtx): void {
-    this.publishRun(this.d.store.updateRun(ctx.runId, { status: 'in_review', endedAt: new Date().toISOString() })!);
+    const run = this.d.store.updateRun(ctx.runId, { status: 'in_review', endedAt: new Date().toISOString() })!;
+    this.publishRun(run);
     this.setAgent(ctx.agent.id, 'available', null, '');
+    this.alert(ctx.project.id, ctx.runId, 'ready', `${ctx.ticket.key} is ready for your review${run.prUrl ? ` (${run.prUrl})` : ''}.`);
   }
 
-  private block(ctx: RunCtx, msg: string, note: string): void {
+  private block(ctx: RunCtx, msg: string, note: string, kind: AlertKind = 'blocked'): void {
+    this.alert(ctx.project.id, ctx.runId, kind, `${ctx.ticket.key} is blocked: ${msg}`);
     this.log(ctx.runId, 'error', msg);
     void ctx.pm.comment(ctx.ticket.key, `Maestro: ${msg} The branch ${this.run(ctx).branch} has the work so far.`).catch(() => undefined);
     this.publishRun(this.d.store.updateRun(ctx.runId, { status: 'blocked', error: msg, endedAt: new Date().toISOString() })!);
@@ -460,6 +483,7 @@ export class Orchestrator {
     const aborted = ctx.signal.aborted;
     const msg = aborted ? 'Stopped by you.' : e instanceof Error ? e.message : String(e);
     this.log(ctx.runId, 'error', msg);
+    if (!aborted) this.alert(ctx.project.id, ctx.runId, 'failed', `${ctx.ticket.key} failed: ${msg}`);
     this.publishRun(this.d.store.updateRun(ctx.runId, { status: aborted ? 'stopped' : 'failed', error: msg, endedAt: new Date().toISOString() })!);
     this.setAgent(ctx.agent.id, 'available', null, '');
   }
@@ -468,8 +492,31 @@ export class Orchestrator {
     return this.d.store.getRun(ctx.runId)!;
   }
 
-  private addCost(ctx: RunCtx, usd: number): void {
-    if (usd) this.d.store.updateRun(ctx.runId, { costUsd: this.run(ctx).costUsd + usd });
+  private addCost(ctx: RunCtx, amount: number, kind: SpendKind = 'worker'): void {
+    if (!amount) return;
+    this.d.store.updateRun(ctx.runId, { costUsd: this.run(ctx).costUsd + amount });
+    this.d.store.addSpend(ctx.project.id, ctx.runId, kind, amount);
+  }
+
+  /** Why the run must not spend more, or null. */
+  private budgetStop(ctx: RunCtx): string | null {
+    const perRun = perRunCap(this.d.store);
+    const spent = this.run(ctx).costUsd;
+    if (perRun > 0 && spent >= perRun) return `This run reached its budget of ${usd(perRun)} (Settings).`;
+    const daily = budgetState(this.d.store, ctx.project.id);
+    if (daily.over) return `${ctx.project.name} reached its daily budget of ${usd(daily.cap)}.`;
+    return null;
+  }
+
+  /** What the next agent call may spend: the smaller of what is left for the run and for the project today. */
+  private budgetLeft(ctx: RunCtx): number | undefined {
+    const perRun = perRunCap(this.d.store);
+    const left = Math.min(perRun > 0 ? perRun - this.run(ctx).costUsd : Infinity, budgetState(this.d.store, ctx.project.id).remaining);
+    return Number.isFinite(left) ? Math.max(0.01, left) : undefined;
+  }
+
+  private alert(projectId: string | null, runId: string | null, kind: AlertKind, message: string): void {
+    bus.publish({ type: 'alert', alert: this.d.store.addAlert({ projectId, runId, kind, message }) });
   }
 
   /** Builds what a run needs from the stored run, for work that resumes after the run first went to review. */

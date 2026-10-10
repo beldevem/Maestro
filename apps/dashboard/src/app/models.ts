@@ -127,6 +127,27 @@ export const CHECKS_LABEL: Record<ChecksState, string> = {
   none: 'No checks',
 };
 
+export interface Alert {
+  id: number;
+  projectId: string | null;
+  runId: string | null;
+  kind: 'blocked' | 'failed' | 'budget' | 'ready';
+  message: string;
+  read: boolean;
+  createdAt: string;
+}
+
+export interface ProjectSpend {
+  projectId: string;
+  name: string;
+  today: number;
+  last7Days: number;
+  total: number;
+  /** 0 means no cap. */
+  dailyCap: number;
+  ownCap: boolean;
+}
+
 export interface ChatAction {
   id: string;
   type: string;

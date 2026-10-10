@@ -1,5 +1,5 @@
 import { Injectable } from '@angular/core';
-import type { Agent, BacklogDraft, ChatAction, BacklogItem, Project, PullRequestRow, Review, ReviewComment, Run, RunEvent, SecretInfo, Ticket, TicketStatus } from './models';
+import type { Agent, Alert, BacklogDraft, ChatAction, ProjectSpend, BacklogItem, Project, PullRequestRow, Review, ReviewComment, Run, RunEvent, SecretInfo, Ticket, TicketStatus } from './models';
 
 export class ApiError extends Error {
   constructor(message: string, readonly status: number, readonly reasons: string[] = []) {
@@ -68,6 +68,11 @@ export class Api {
   confirmAction = (projectId: string, actionId: string) =>
     this.call<{ message: string; runId?: string }>('POST', `/projects/${projectId}/chat/actions/${actionId}`, {});
   dismissAction = (projectId: string, actionId: string) => this.call('DELETE', `/projects/${projectId}/chat/actions/${actionId}`);
+
+  alerts = () => this.call<{ alerts: Alert[]; unread: number }>('GET', '/alerts');
+  markAlertsRead = (ids?: number[]) => this.call('POST', '/alerts/read', ids ? { ids } : {});
+  spend = () => this.call<ProjectSpend[]>('GET', '/spend');
+  setProjectBudget = (projectId: string, dailyUsd: number | null) => this.call<{ dailyCap: number }>('PUT', `/projects/${projectId}/budget`, { dailyUsd });
 
   settings = () => this.call<{ settings: Record<string, string>; secrets: SecretInfo[] }>('GET', '/settings');
   saveSettings = (s: Record<string, string>) => this.call('PUT', '/settings', s);

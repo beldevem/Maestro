@@ -28,6 +28,8 @@ This covers Phases 0 to 3 of the plan: the board, worker agents, agent states, c
 - **Auto-assign** (Phase 2): with the board toggle on (or `orchestration.auto_assign` in the workflow config), Maestro hands ready to-do tickets to free workers every 15 seconds and whenever a run ends. It skips tickets whose dependencies are not finished (`dependency_ready_when: done` or `in_review`), runs at most `max_parallel` tickets per project, and with `one_per_area` never runs two tickets with the same `area:` label at once. Blocked cards show "Waits on KEY".
 - **Chat** per project answers questions using the project knowledge, its tickets, its runs and a read-only look at the code. Ask it to do something (create a ticket, assign or move one, plan the backlog, pause or resume an agent) and it proposes the action as a card; nothing runs until you click Confirm.
 - **Mark done** on In review cards for projects without a PM tool.
+- **Budgets**: a budget per run (cumulative over the run's agent calls; a run that spends it is blocked, and the reviewer step is skipped) and a daily budget per project (a default in Settings, an override on the project's Runs tab). At the daily budget nothing new starts and auto-assign pauses until tomorrow. Every agent call's cost goes into a spend ledger; the Projects screen shows spend today, over 7 days and in total.
+- **Alerts** when an agent is blocked, a run fails, a budget is reached or a change is ready for review: in the Alerts screen (with an unread count in the menu) and, if you turn them on in Settings, as desktop notifications from the browser.
 - **Settings** hold API keys and tokens, the default models (worker, chat, planner), how many tickets run at once, and a budget per run.
 
 ## Not in the MVP yet

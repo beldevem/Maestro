@@ -147,6 +147,20 @@ export interface BacklogDraft {
   approvedAt: string | null;
 }
 
+export type SpendKind = 'worker' | 'reviewer' | 'planner' | 'chat';
+
+export type AlertKind = 'blocked' | 'failed' | 'budget' | 'ready';
+
+export interface Alert {
+  id: number;
+  projectId: string | null;
+  runId: string | null;
+  kind: AlertKind;
+  message: string;
+  read: boolean;
+  createdAt: string;
+}
+
 export type ReviewVerdict = 'approve' | 'changes_requested' | 'comment';
 export type ReviewSource = 'agent' | 'human' | 'github';
 

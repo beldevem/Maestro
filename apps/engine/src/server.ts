@@ -16,6 +16,7 @@ import type { Store } from './db.js';
 import { bus, type BusEvent } from './events.js';
 import { NotReadyError, Orchestrator } from './orchestrator.js';
 import { git } from './proc.js';
+import { budgetState, dailyCap, startOfToday, usd } from './budget.js';
 import { readBaseMemory } from './memory.js';
 import { KNOWN_SECRETS, type SecretStore } from './secrets.js';
 import type { Agent } from './types.js';
@@ -91,13 +92,17 @@ export async function buildServer(d: ServerDeps): Promise<FastifyInstance> {
   /** Runs the planner once per project at a time and stores the draft. */
   const plan = async (p: ReturnType<typeof project>) => {
     if (planning.has(p.id)) throw Object.assign(new Error('The planner is already working on this project.'), { statusCode: 409 });
+    const budget = budgetState(d.store, p.id);
+    if (budget.over) throw new Error(`${p.name} has reached its daily budget of ${usd(budget.cap)}.`);
     planning.add(p.id);
     try {
       const tickets = await pmFor(p, d.store, d.secrets).listTickets();
       const cwd = existsSync(repoDir(p)) ? repoDir(p) : tmpdir();
       const docs = await docsContextFor(p, d.secrets);
       const memory = existsSync(repoDir(p)) ? await readBaseMemory(repoDir(p), parseWorkflow(p.workflowYaml).base_branch) : '';
-      return await draftBacklog(d, p, tickets, cwd, { docs, memory });
+      const draft = await draftBacklog(d, p, tickets, cwd, { docs, memory });
+      d.store.addSpend(p.id, null, 'planner', draft.costUsd);
+      return draft;
     } finally {
       planning.delete(p.id);
     }
@@ -353,6 +358,7 @@ export async function buildServer(d: ServerDeps): Promise<FastifyInstance> {
       .parse(req.body);
     const tickets = await pmFor(p, d.store, d.secrets).listTickets().catch(() => []);
     const reply = await askAssistant(d, p, tickets, repoDir(p), body.history, body.message);
+    d.store.addSpend(p.id, null, 'chat', reply.costUsd);
     const now = Date.now();
     for (const [id, x] of proposals) if (x.expires < now) proposals.delete(id);
     const actions = reply.actions.map((action) => {
@@ -376,6 +382,37 @@ export async function buildServer(d: ServerDeps): Promise<FastifyInstance> {
     return { ok: true };
   });
 
+  // Alerts: blocked, failed, budget reached, ready for review
+  app.get('/api/alerts', async () => {
+    const alerts = d.store.listAlerts(50);
+    return { alerts, unread: alerts.filter((a) => !a.read).length };
+  });
+  app.post('/api/alerts/read', async (req) => {
+    const { ids } = z.object({ ids: z.array(z.number().int()).optional() }).parse(req.body ?? {});
+    d.store.markAlertsRead(ids);
+    return { ok: true };
+  });
+
+  // Spend and budgets
+  app.get('/api/spend', async () => {
+    const today = d.store.spendByProject(startOfToday());
+    const week = d.store.spendByProject(new Date(Date.now() - 7 * 86_400_000).toISOString());
+    const total = d.store.spendByProject();
+    return d.store.listProjects().map((p) => ({
+      projectId: p.id, name: p.name,
+      today: today.get(p.id) ?? 0, last7Days: week.get(p.id) ?? 0, total: total.get(p.id) ?? 0,
+      dailyCap: dailyCap(d.store, p.id), ownCap: d.store.getSetting(`budget.daily.${p.id}`) !== undefined,
+    }));
+  });
+  app.put<{ Params: { id: string } }>('/api/projects/:id/budget', async (req) => {
+    const p = project(req.params.id);
+    const { dailyUsd } = z.object({ dailyUsd: z.number().min(0).nullable() }).parse(req.body);
+    if (dailyUsd === null) d.store.deleteSetting(`budget.daily.${p.id}`);
+    else d.store.setSetting(`budget.daily.${p.id}`, String(dailyUsd));
+    void d.orchestrator.tick();
+    return { dailyCap: dailyCap(d.store, p.id) };
+  });
+
   // Settings
   app.get('/api/settings', async () => {
     const set = new Set(d.secrets.names());
@@ -387,8 +424,9 @@ export async function buildServer(d: ServerDeps): Promise<FastifyInstance> {
         'model.reviewer': 'claude-opus-5-5',
         maxConcurrentRuns: '3',
         'budget.perRunUsd': '5',
+        'budget.projectDailyUsd': '0',
         // Per-project values (auto-assign toggle, pending memory) have their own endpoints.
-        ...Object.fromEntries(Object.entries(d.store.allSettings()).filter(([k]) => !/^(autoAssign|memory)\./.test(k))),
+        ...Object.fromEntries(Object.entries(d.store.allSettings()).filter(([k]) => !/^(autoAssign|memory|budget\.daily)\./.test(k))),
       },
       secrets: KNOWN_SECRETS.map((s) => ({ ...s, set: set.has(s.name) || !!process.env[s.name] })),
     };

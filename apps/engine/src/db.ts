@@ -1,6 +1,6 @@
 import { DatabaseSync } from 'node:sqlite';
 import { randomUUID } from 'node:crypto';
-import type { Agent, BacklogDraft, BacklogItem, Project, Review, Run, RunEvent, RunEventKind, Ticket } from './types.js';
+import type { Agent, Alert, AlertKind, BacklogDraft, BacklogItem, Project, Review, Run, RunEvent, RunEventKind, SpendKind, Ticket } from './types.js';
 import { DEFAULT_WORKFLOW_YAML } from './workflow.js';
 
 const SCHEMA = `
@@ -42,6 +42,14 @@ CREATE TABLE IF NOT EXISTS reviews (
   cost_usd REAL NOT NULL DEFAULT 0, created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS reviews_run ON reviews(run_id);
+CREATE TABLE IF NOT EXISTS spend (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, project_id TEXT NOT NULL, run_id TEXT, kind TEXT NOT NULL, usd REAL NOT NULL, ts TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS spend_project_ts ON spend(project_id, ts);
+CREATE TABLE IF NOT EXISTS alerts (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, project_id TEXT, run_id TEXT, kind TEXT NOT NULL, message TEXT NOT NULL,
+  read INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS ticket_deps (
   project_id TEXT NOT NULL, ticket_key TEXT NOT NULL, depends_on_key TEXT NOT NULL,
   PRIMARY KEY (project_id, ticket_key, depends_on_key)
@@ -115,6 +123,7 @@ export class Store {
     this.db.prepare('DELETE FROM manual_tickets WHERE project_id = ?').run(id);
     this.db.prepare('DELETE FROM backlog_drafts WHERE project_id = ?').run(id);
     this.db.prepare('DELETE FROM ticket_deps WHERE project_id = ?').run(id);
+    this.db.prepare("DELETE FROM settings WHERE key LIKE '%.' || ?").run(id);
   }
 
   // Agents
@@ -278,6 +287,39 @@ export class Store {
       map.set(r.ticket_key, [...(map.get(r.ticket_key) ?? []), r.depends_on_key]);
     }
     return map;
+  }
+
+  // Spend ledger: every agent call's cost, so budgets and the overview don't depend on run rows alone
+  addSpend(projectId: string, runId: string | null, kind: SpendKind, usd: number): void {
+    if (usd > 0) this.db.prepare('INSERT INTO spend (project_id, run_id, kind, usd, ts) VALUES (?, ?, ?, ?, ?)').run(projectId, runId, kind, usd, now());
+  }
+  spendSince(projectId: string, sinceIso: string): number {
+    const row = this.db.prepare('SELECT COALESCE(SUM(usd), 0) AS total FROM spend WHERE project_id = ? AND ts >= ?').get(projectId, sinceIso) as Row;
+    return row.total;
+  }
+  spendByProject(sinceIso = ''): Map<string, number> {
+    const rows = this.db.prepare('SELECT project_id, SUM(usd) AS total FROM spend WHERE ts >= ? GROUP BY project_id').all(sinceIso) as Row[];
+    return new Map(rows.map((r) => [r.project_id, r.total]));
+  }
+
+  // Alerts
+  addAlert(input: { projectId: string | null; runId: string | null; kind: AlertKind; message: string }): Alert {
+    const createdAt = now();
+    const res = this.db.prepare('INSERT INTO alerts (project_id, run_id, kind, message, created_at) VALUES (?, ?, ?, ?, ?)')
+      .run(input.projectId, input.runId, input.kind, input.message, createdAt);
+    return { ...input, id: Number(res.lastInsertRowid), read: false, createdAt };
+  }
+  listAlerts(limit = 50): Alert[] {
+    return (this.db.prepare('SELECT * FROM alerts ORDER BY id DESC LIMIT ?').all(limit) as Row[]).map((r) => ({
+      id: r.id, projectId: r.project_id ?? null, runId: r.run_id ?? null, kind: r.kind, message: r.message, read: !!r.read, createdAt: r.created_at,
+    }));
+  }
+  hasAlertSince(projectId: string, kind: AlertKind, sinceIso: string): boolean {
+    return !!this.db.prepare('SELECT 1 FROM alerts WHERE project_id = ? AND kind = ? AND created_at >= ?').get(projectId, kind, sinceIso);
+  }
+  markAlertsRead(ids?: number[]): void {
+    if (!ids) this.db.prepare('UPDATE alerts SET read = 1').run();
+    else for (const id of ids) this.db.prepare('UPDATE alerts SET read = 1 WHERE id = ?').run(id);
   }
 
   // Settings
