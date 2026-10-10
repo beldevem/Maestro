@@ -53,6 +53,7 @@ h2 { font-size: 15px; margin: 0 0 8px; }
   .shell { grid-template-columns: 1fr; grid-template-rows: auto 1fr; }
   .nav { flex-direction: row; align-items: center; border-right: 0; border-bottom: 1px solid var(--border); padding: 8px; overflow-x: auto; }
   .brand { padding: 8px 12px; }
+  .nav a { white-space: nowrap; flex-shrink: 0; }
   .conn { margin: 0 0 0 auto; font-size: 0; }
   .conn::before { content: ''; display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
   .content { padding: 16px; }
