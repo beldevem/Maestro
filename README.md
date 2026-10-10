@@ -110,5 +110,6 @@ The engine tests use stand-in agents and fake APIs, so they need no tokens or ne
 - Tokens are never sent to the dashboard. Code host credentials are passed per git command, not written into remotes.
 - The engine listens on 127.0.0.1 only, answers only to localhost host names (so a web page can't reach it through DNS rebinding), and refuses writes whose Origin is another site. Set `MAESTRO_ALLOWED_HOSTS` to add a host name.
 - The live event stream is same-origin only, so other web pages can't read agent activity.
+- Agents load no settings files: a repository's `.claude/settings.json` could add hooks or permission rules that widen the tool allowlist, and an agent can write that file in its own worktree. The repo's `CLAUDE.md` is given to agents as text instead.
 - Planner, reviewer and chat agents are read-only. Quality gates can run in a Docker container (`sandbox.type: docker`).
 - Budgets cap what a run and a project can spend in a day.

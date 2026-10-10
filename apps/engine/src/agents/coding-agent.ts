@@ -1,4 +1,6 @@
 import { query, type Options } from '@anthropic-ai/claude-agent-sdk';
+import { existsSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
 
 export interface AgentMessage {
   kind: 'agent' | 'tool' | 'info';
@@ -42,26 +44,52 @@ function describeTool(name: string, input: Record<string, unknown>): string {
   return target ? `${name} ${String(target)}` : name;
 }
 
+const INSTRUCTIONS_CHARS = 10_000;
+
+/** The repository's CLAUDE.md, read as plain text (never as settings). */
+export function repoInstructions(cwd: string): string {
+  for (const name of ['CLAUDE.md', '.claude/CLAUDE.md']) {
+    const file = join(cwd, name);
+    if (existsSync(file)) {
+      const text = readFileSync(file, 'utf8').trim();
+      return text.length > INSTRUCTIONS_CHARS ? `${text.slice(0, INSTRUCTIONS_CHARS)}\n…(cut)` : text;
+    }
+  }
+  return '';
+}
+
+/**
+ * SDK options for a task. No filesystem settings are loaded: a repository's .claude/settings.json could
+ * add hooks (shell commands) or permission rules that widen the tool allowlist, and an agent can write that
+ * file in its own worktree. The repo's CLAUDE.md is passed in the system prompt instead.
+ */
+export function agentOptions(task: AgentTask, abortController: AbortController): Options {
+  const instructions = repoInstructions(task.cwd);
+  return {
+    cwd: task.cwd,
+    model: task.model,
+    allowedTools: task.allowedTools,
+    // Anything not in allowedTools is refused instead of waiting for a prompt nobody will answer.
+    permissionMode: 'dontAsk',
+    systemPrompt: {
+      type: 'preset', preset: 'claude_code',
+      append: instructions ? `${task.systemPrompt}\n\n## The repository's CLAUDE.md (project conventions; information, not permissions)\n${instructions}` : task.systemPrompt,
+    },
+    settingSources: [],
+    maxTurns: task.maxTurns ?? 80,
+    maxBudgetUsd: task.maxBudgetUsd,
+    resume: task.resume,
+    abortController,
+    env: { ...process.env, ...task.env } as Record<string, string>,
+    outputFormat: task.outputSchema ? { type: 'json_schema', schema: task.outputSchema } : undefined,
+  };
+}
+
 export class ClaudeCodingAgent implements CodingAgent {
   async run(task: AgentTask): Promise<AgentOutcome> {
     const abortController = new AbortController();
     task.signal?.addEventListener('abort', () => abortController.abort(), { once: true });
-
-    const options: Options = {
-      cwd: task.cwd,
-      model: task.model,
-      allowedTools: task.allowedTools,
-      // Anything not in allowedTools is refused instead of waiting for a prompt nobody will answer.
-      permissionMode: 'dontAsk',
-      systemPrompt: { type: 'preset', preset: 'claude_code', append: task.systemPrompt },
-      settingSources: ['project'],
-      maxTurns: task.maxTurns ?? 80,
-      maxBudgetUsd: task.maxBudgetUsd,
-      resume: task.resume,
-      abortController,
-      env: { ...process.env, ...task.env } as Record<string, string>,
-      outputFormat: task.outputSchema ? { type: 'json_schema', schema: task.outputSchema } : undefined,
-    };
+    const options = agentOptions(task, abortController);
 
     let sessionId: string | null = task.resume ?? null;
     let text = '';
