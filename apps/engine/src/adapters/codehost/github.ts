@@ -13,6 +13,7 @@ export class GitHubCodeHost implements CodeHostAdapter {
   constructor(
     private readonly token: () => string | undefined,
     private readonly reposDir: string,
+    private readonly fetchImpl: typeof fetch = fetch,
   ) {}
 
   /** The token goes in a per-command header, never in the remote URL or on disk. */
@@ -49,7 +50,7 @@ export class GitHubCodeHost implements CodeHostAdapter {
   private async call<T>(path: string, init: { method?: string; body?: unknown } = {}): Promise<T> {
     const token = this.token();
     if (!token) throw new Error('Add a GitHub token in Settings to use pull requests.');
-    const res = await fetch(`${API}${path}`, {
+    const res = await this.fetchImpl(`${API}${path}`, {
       method: init.method ?? 'GET',
       headers: {
         Authorization: `Bearer ${token}`,
