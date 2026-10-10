@@ -1,4 +1,5 @@
 import { existsSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { z } from 'zod';
 import type { Store } from '../db.js';
 import type { SecretStore } from '../secrets.js';
@@ -117,7 +118,8 @@ Return your reply in the requested structured format.`;
   const transcript = history.map((t) => `${t.role === 'user' ? 'User' : 'Assistant'}: ${t.content}`).join('\n\n');
   const key = deps.secrets.get('ANTHROPIC_API_KEY');
   const out = await deps.agent.run({
-    cwd: existsSync(cwd) ? cwd : process.cwd(),
+    // Never fall back to the engine's own folder: the assistant would read Maestro's code as if it were the project's.
+    cwd: cwd && existsSync(cwd) ? cwd : tmpdir(),
     prompt: transcript ? `${transcript}\n\nUser: ${message}` : message,
     systemPrompt: system,
     model: deps.store.getSetting('model.assistant') || 'claude-sonnet-5-5',

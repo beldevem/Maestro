@@ -84,10 +84,12 @@ describe('chat actions', () => {
     await app.close();
   });
 
-  it('falls back to plain text answers', async () => {
-    const { app, p } = await setup(new FakeAssistant({ text: 'Just an answer.' }));
+  it('falls back to plain text answers, and never reads the engine folder when the repo is missing', async () => {
+    const agent = new FakeAssistant({ text: 'Just an answer.' });
+    const { app, p } = await setup(agent);
     const res = (await app.inject({ method: 'POST', url: `/api/projects/${p.id}/chat`, payload: { message: 'hi' } })).json();
     expect(res).toMatchObject({ answer: 'Just an answer.', actions: [] });
+    expect(agent.tasks[0].cwd).not.toBe(process.cwd());
     await app.close();
   });
 
