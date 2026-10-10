@@ -36,6 +36,9 @@ export class SecretStore {
 export const KNOWN_SECRETS = [
   { name: 'ANTHROPIC_API_KEY', label: 'Anthropic API key', help: 'Optional if you are signed in to Claude Code on this machine.' },
   { name: 'GITHUB_TOKEN', label: 'GitHub token', help: 'Fine-grained token with Contents and Pull requests read/write.' },
+  { name: 'GITLAB_TOKEN', label: 'GitLab token', help: 'Personal or project access token with the api and write_repository scopes.' },
+  { name: 'BITBUCKET_USERNAME', label: 'Bitbucket username', help: 'Your Bitbucket username (not the email), used with the app password.' },
+  { name: 'BITBUCKET_APP_PASSWORD', label: 'Bitbucket app password', help: 'With Repositories and Pull requests read and write.' },
   { name: 'JIRA_API_TOKEN', label: 'Atlassian API token', help: 'From id.atlassian.com, for Jira and Confluence, used with the email set on the project.' },
   { name: 'TRELLO_API_KEY', label: 'Trello API key', help: 'From trello.com/power-ups/admin.' },
   { name: 'TRELLO_TOKEN', label: 'Trello token', help: 'Generated for your API key.' },

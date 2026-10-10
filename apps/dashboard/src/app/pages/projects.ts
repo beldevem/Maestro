@@ -33,7 +33,7 @@ import { ConnectorFields, emptyConnectors } from './connector-fields';
           <h2>{{ p.name }}</h2>
           @if (p.description) { <p>{{ p.description }}</p> }
           <p class="meta">
-            {{ p.codeHost.provider === 'github' ? p.codeHost.repo : p.codeHost.localPath }}
+            {{ p.codeHost.provider === 'local' ? p.codeHost.localPath : p.codeHost.repo }}
             · tickets in {{ pmLabel[p.pm.provider] }}
           </p>
         </a>

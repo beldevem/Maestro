@@ -55,9 +55,9 @@ export interface CodeHostAdapter {
   /** Make sure a local clone exists and return its path. */
   ensureRepo(project: Project): Promise<string>;
   /** Bring the base branch up to date in the clone. */
-  syncBase(repoPath: string, base: string): Promise<void>;
+  syncBase(repoPath: string, base: string, project: Project): Promise<void>;
   /** Publish the branch so a PR can be opened. */
-  pushBranch(worktree: string, branch: string): Promise<void>;
+  pushBranch(worktree: string, branch: string, project: Project): Promise<void>;
   openPullRequest(project: Project, input: PullRequestInput): Promise<PullRequestRef>;
   /** Post a review on the PR. Hosts without PRs leave it out and reviews stay in Maestro. */
   postReview?(project: Project, prNumber: number, review: ReviewToPost): Promise<PostedReview>;

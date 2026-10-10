@@ -28,8 +28,9 @@ export interface ServerDeps {
 }
 
 const codeHostSchema = z.object({
-  provider: z.enum(['github', 'local']),
+  provider: z.enum(['github', 'gitlab', 'bitbucket', 'local']),
   repo: z.string().optional(),
+  baseUrl: z.string().optional(),
   localPath: z.string().optional(),
   defaultBranch: z.string().default('main'),
 });

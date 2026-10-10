@@ -6,7 +6,7 @@ This covers Phases 0 to 3 of the plan: the board, worker agents, agent states, c
 
 ## What works now
 
-- **Projects** linked to a GitHub repo or a local git folder. Each project has its own context, requirements and best practices, which every agent reads.
+- **Projects** linked to a GitHub, GitLab (cloud or self-managed) or Bitbucket Cloud repo, or a local git folder. Each project has its own context, requirements and best practices, which every agent reads.
 - **Tickets** live in the project's PM tool: Jira, Trello, or Maestro itself when you have no PM tool. You can create tickets from the board.
 - **Workflow config** per project (YAML): base branch, branch naming, commit convention, Definition of Ready, quality gates, fix attempts and Definition of Done.
 - **Worker agents** run on the Claude Agent SDK. Each ticket gets its own git worktree. When you assign a ticket, the worker:
@@ -14,7 +14,7 @@ This covers Phases 0 to 3 of the plan: the board, worker agents, agent states, c
   2. implements the ticket;
   3. runs the quality gates, and if one fails, tries to fix it, up to `max_fix_attempts` times;
   4. commits the change;
-  5. for GitHub, pushes and opens a draft PR; for a local folder, leaves the branch for you to review in Maestro;
+  5. for GitHub, GitLab or Bitbucket, pushes and opens a draft pull (merge) request; for a local folder, leaves the branch for you to review in Maestro;
   6. moves the ticket to "In review" and comments with the link.
 - **Agents screen** shows each agent's live state: available, working on ticket, running checks, blocked, paused. You can pause, unblock or stop an agent.
 - **Run view** shows a live activity log (agent messages, tool calls, gate results) and the diff.
@@ -32,7 +32,6 @@ This covers Phases 0 to 3 of the plan: the board, worker agents, agent states, c
 ## Not in the MVP yet
 
 - Dependency links in Jira and Trello themselves: Maestro keeps dependencies in its own database and writes them into the ticket text.
-- GitLab and Bitbucket adapters (the code host interface is ready for them).
 - Secrets in the OS keychain. For now they are in `~/.maestro/secrets.json`, readable only by you.
 
 ## Requirements
@@ -41,6 +40,8 @@ This covers Phases 0 to 3 of the plan: the board, worker agents, agent states, c
 - git.
 - Either an Anthropic API key (added in Settings) or Claude Code signed in on this machine.
 - For GitHub projects: a fine-grained token with **Contents** and **Pull requests** read and write access to the repo.
+- For GitLab projects: a personal or project access token with the `api` and `write_repository` scopes.
+- For Bitbucket projects: your username and an app password with **Repositories** and **Pull requests** read and write.
 
 ## Run it
 

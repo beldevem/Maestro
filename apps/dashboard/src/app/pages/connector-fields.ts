@@ -25,12 +25,22 @@ export function emptyConnectors(): ConnectorModel {
         <select [(ngModel)]="m.codeHost.provider" name="ch-provider">
           <option value="github">GitHub</option>
           <option value="local">Local folder on this machine</option>
-          <option value="gitlab" disabled>GitLab (coming)</option>
-          <option value="bitbucket" disabled>Bitbucket (coming)</option>
+          <option value="gitlab">GitLab</option>
+          <option value="bitbucket">Bitbucket Cloud</option>
         </select>
       </label>
       @if (m.codeHost.provider === 'github') {
         <label>Repository <input [(ngModel)]="m.codeHost.repo" name="ch-repo" placeholder="owner/name" required /></label>
+        <p class="hint">Add a GitHub token in Settings.</p>
+      } @else if (m.codeHost.provider === 'gitlab') {
+        <div class="row">
+          <label>Project path <input [(ngModel)]="m.codeHost.repo" name="ch-repo" placeholder="group/project" required /></label>
+          <label>GitLab URL <input [(ngModel)]="m.codeHost.baseUrl" name="ch-base" placeholder="https://gitlab.com" /></label>
+        </div>
+        <p class="hint">Add a GitLab token (api and write_repository scopes) in Settings. Merge requests are opened and reviewed like pull requests.</p>
+      } @else if (m.codeHost.provider === 'bitbucket') {
+        <label>Repository <input [(ngModel)]="m.codeHost.repo" name="ch-repo" placeholder="workspace/repo" required /></label>
+        <p class="hint">Add your Bitbucket username and an app password (Repositories and Pull requests, read and write) in Settings.</p>
       } @else {
         <label>Folder path <input [(ngModel)]="m.codeHost.localPath" name="ch-path" placeholder="/home/you/projects/app" required /></label>
       }

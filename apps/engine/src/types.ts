@@ -1,11 +1,13 @@
-export type CodeHostProvider = 'github' | 'local';
+export type CodeHostProvider = 'github' | 'gitlab' | 'bitbucket' | 'local';
 export type PmProvider = 'manual' | 'jira' | 'trello';
 export type DesignProvider = 'none' | 'figma';
 
 export interface CodeHostConfig {
   provider: CodeHostProvider;
-  /** owner/repo for GitHub */
+  /** owner/repo for GitHub, group/project for GitLab, workspace/repo for Bitbucket */
   repo?: string;
+  /** Self-managed GitLab, e.g. https://gitlab.example.com (default https://gitlab.com) */
+  baseUrl?: string;
   /** absolute path for a local folder */
   localPath?: string;
   defaultBranch: string;

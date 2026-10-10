@@ -95,7 +95,7 @@ export class Orchestrator {
 
     const codeHost = this.host(project);
     const repoPath = await codeHost.ensureRepo(project);
-    if (wf.pull_before_start) await codeHost.syncBase(repoPath, wf.base_branch);
+    if (wf.pull_before_start) await codeHost.syncBase(repoPath, wf.base_branch, project);
     const baseRef = await this.resolveBase(repoPath, wf.base_branch);
 
     let branch = branchName(wf.branch_pattern, ticket);
@@ -244,7 +244,7 @@ export class Orchestrator {
       await this.commit(ctx, commitMessage(wf, ticket));
 
       const run = this.run(ctx);
-      await codeHost.pushBranch(ctx.worktree, run.branch);
+      await codeHost.pushBranch(ctx.worktree, run.branch, project);
       const pr = await codeHost.openPullRequest(project, {
         branch: run.branch,
         base: wf.base_branch,
@@ -390,7 +390,7 @@ export class Orchestrator {
       await this.commit(ctx, ctx.wf.commit_convention === 'conventional'
         ? `fix: address review feedback [${ctx.ticket.key}]`
         : `Address review feedback [${ctx.ticket.key}]`);
-      await ctx.codeHost.pushBranch(ctx.worktree, this.run(ctx).branch);
+      await ctx.codeHost.pushBranch(ctx.worktree, this.run(ctx).branch, ctx.project);
     } else {
       this.log(ctx.runId, 'info', 'The worker changed no files for this feedback; see its reply above.');
     }
