@@ -10,6 +10,7 @@ import { runReviewer } from './agents/reviewer.js';
 import type { Store } from './db.js';
 import { bus } from './events.js';
 import { runGates, type GateResult } from './gates.js';
+import { appendLearnings, extractLearnings, MEMORY_FILE, readMemoryFile, writeMemoryFile } from './memory.js';
 import { git } from './proc.js';
 import type { SecretStore } from './secrets.js';
 import type { Agent, AgentState, Project, Review, ReviewComment, Run, RunEventKind, Ticket } from './types.js';
@@ -35,6 +36,8 @@ export class NotReadyError extends Error {
 
 /** What gets committed: everything except fetched design files. */
 const CHANGE_PATHS = ['--', '.', `:(exclude)${DESIGN_DIR}`];
+/** What counts as the worker having changed something: not the memory Maestro writes itself. */
+const CODE_PATHS = [...CHANGE_PATHS, `:(exclude)${MEMORY_FILE}`];
 
 const BASE_TOOLS = ['Read', 'Write', 'Edit', 'MultiEdit', 'Glob', 'Grep', 'TodoWrite', 'Bash(git status:*)', 'Bash(git diff:*)', 'Bash(ls:*)'];
 
@@ -52,6 +55,8 @@ interface RunCtx {
   env: Record<string, string>;
   /** Confluence pages for the project and ticket, as text. */
   docs: string | null;
+  /** .maestro/memory.md as the worker starts. */
+  memory: string;
 }
 
 export class Orchestrator {
@@ -114,7 +119,7 @@ export class Orchestrator {
     this.setAgent(agent.id, 'working', run.id, `On ${ticket.key}`);
     this.log(run.id, 'info', `${agent.name} picked up ${ticket.key} on branch ${branch} from ${baseRef}.`);
     this.launch(run.id, (signal) =>
-      this.work({ runId: run.id, project, wf, ticket, agent, worktree, repoPath, codeHost, pm, signal, env: this.agentEnv(), docs: null }),
+      this.work({ runId: run.id, project, wf, ticket, agent, worktree, repoPath, codeHost, pm, signal, env: this.agentEnv(), docs: null, memory: '' }),
     );
     return run;
   }
@@ -234,6 +239,8 @@ export class Orchestrator {
       });
       if (design) this.log(ctx.runId, 'info', `Design context from Figma is in ${DESIGN_DIR}/.`);
       ctx.docs = await this.docsFor(ctx);
+      const memoryEdited = this.applyPendingMemory(ctx);
+      ctx.memory = readMemoryFile(ctx.worktree);
       const done = await this.implement(ctx, ticketPrompt(ticket, design), false);
       if (!done) return;
 
@@ -241,7 +248,9 @@ export class Orchestrator {
         this.block(ctx, 'The agent finished without changing any files.', `Blocked on ${ticket.key}: no changes`);
         return;
       }
+      done.summary = this.recordLearnings(ctx, done.summary);
       await this.commit(ctx, commitMessage(wf, ticket));
+      if (memoryEdited) store.deleteSetting(`memory.${project.id}`);
 
       const run = this.run(ctx);
       await codeHost.pushBranch(ctx.worktree, run.branch, project);
@@ -285,7 +294,7 @@ export class Orchestrator {
       const outcome = await this.d.agent.run({
         cwd: ctx.worktree,
         prompt,
-        systemPrompt: workerSystemPrompt(project, wf, ctx.docs),
+        systemPrompt: workerSystemPrompt(project, wf, { docs: ctx.docs, memory: ctx.memory }),
         model: this.workerModel(agent),
         allowedTools: tools,
         resume: this.run(ctx).sessionId ?? undefined,
@@ -321,7 +330,30 @@ export class Orchestrator {
   }
 
   private async hasChanges(ctx: RunCtx): Promise<boolean> {
-    return !!(await git(ctx.worktree, ['status', '--porcelain', ...CHANGE_PATHS]));
+    return !!(await git(ctx.worktree, ['status', '--porcelain', ...CODE_PATHS]));
+  }
+
+  /** Puts your pending memory edit into the worktree, so it is committed with this ticket. */
+  private applyPendingMemory(ctx: RunCtx): boolean {
+    const pending = this.d.store.getSetting(`memory.${ctx.project.id}`);
+    if (pending === undefined) return false;
+    writeMemoryFile(ctx.worktree, pending);
+    this.log(ctx.runId, 'info', `Your edit to ${MEMORY_FILE} goes into this ticket's commit.`);
+    return true;
+  }
+
+  /** Takes the Learnings section off the worker's reply and adds it to the memory file. */
+  private recordLearnings(ctx: RunCtx, reply: string): string {
+    const { summary, learnings } = extractLearnings(reply);
+    if (learnings.length) {
+      const before = readMemoryFile(ctx.worktree);
+      const after = appendLearnings(before, ctx.ticket.key, learnings);
+      if (after !== before) {
+        writeMemoryFile(ctx.worktree, after);
+        this.log(ctx.runId, 'info', `Added to ${MEMORY_FILE}:\n${learnings.map((l) => `- ${l}`).join('\n')}`);
+      }
+    }
+    return summary;
   }
 
   private async commit(ctx: RunCtx, message: string): Promise<void> {
@@ -352,7 +384,7 @@ export class Orchestrator {
             cwd: ctx.worktree, model: store.getSetting('model.reviewer') || 'claude-opus-5-5', env: ctx.env, signal,
             onMessage: (m) => m.kind === 'agent' && this.log(ctx.runId, 'agent', `Reviewer: ${m.text}`),
           },
-          project, wf, ticket, this.run(ctx).baseRef ?? wf.base_branch,
+          project, wf, ticket, this.run(ctx).baseRef ?? wf.base_branch, readMemoryFile(ctx.worktree),
         );
       } catch (e) {
         if (signal.aborted) throw e;
@@ -385,8 +417,9 @@ export class Orchestrator {
     this.publishRun(store.updateRun(ctx.runId, { status: 'running', endedAt: null })!);
     const done = await this.implement(ctx, reviewFixPrompt(feedback), true);
     if (!done) return false;
+    done.summary = this.recordLearnings(ctx, done.summary);
     store.markReviewsAddressed(feedback.map((f) => f.id));
-    if (await this.hasChanges(ctx)) {
+    if (await git(ctx.worktree, ['status', '--porcelain', ...CHANGE_PATHS])) {
       await this.commit(ctx, ctx.wf.commit_convention === 'conventional'
         ? `fix: address review feedback [${ctx.ticket.key}]`
         : `Address review feedback [${ctx.ticket.key}]`);
@@ -455,7 +488,10 @@ export class Orchestrator {
       await git(repoPath, ['worktree', 'prune']);
       await git(repoPath, ['worktree', 'add', run.worktree, run.branch]);
     }
-    const ctx: RunCtx = { runId: run.id, project, wf, ticket, agent, worktree: run.worktree, repoPath, codeHost, pm, signal, env: this.agentEnv(), docs: null };
+    const ctx: RunCtx = {
+      runId: run.id, project, wf, ticket, agent, worktree: run.worktree, repoPath, codeHost, pm, signal, env: this.agentEnv(), docs: null,
+      memory: readMemoryFile(run.worktree),
+    };
     ctx.docs = await this.docsFor(ctx);
     return ctx;
   }

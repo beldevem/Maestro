@@ -37,6 +37,10 @@ export class Api {
   autoAssign = (projectId: string) => this.call<{ enabled: boolean }>('GET', `/projects/${projectId}/auto-assign`);
   setAutoAssign = (projectId: string, enabled: boolean) => this.call<{ enabled: boolean }>('PUT', `/projects/${projectId}/auto-assign`, { enabled });
 
+  memory = (projectId: string) => this.call<{ content: string; pending: boolean }>('GET', `/projects/${projectId}/memory`);
+  saveMemory = (projectId: string, content: string) => this.call<{ content: string; pending: boolean }>('PUT', `/projects/${projectId}/memory`, { content });
+  discardMemory = (projectId: string) => this.call('DELETE', `/projects/${projectId}/memory`);
+
   plan = (projectId: string) => this.call<BacklogDraft>('POST', `/projects/${projectId}/plan`, {});
   drafts = (projectId: string) => this.call<BacklogDraft[]>('GET', `/projects/${projectId}/drafts`);
   updateDraft = (id: string, items: BacklogItem[]) => this.call<BacklogDraft>('PATCH', `/drafts/${id}`, { items });

@@ -4,7 +4,7 @@ import type { Store } from '../db.js';
 import type { SecretStore } from '../secrets.js';
 import type { BacklogDraft, BacklogItem, Project, Ticket } from '../types.js';
 import type { CodingAgent } from './coding-agent.js';
-import { plannerSystemPrompt } from './prompts.js';
+import { plannerSystemPrompt, type ExtraKnowledge } from './prompts.js';
 
 const SIZES = ['XS', 'S', 'M', 'L', 'XL'] as const;
 
@@ -72,13 +72,13 @@ export async function draftBacklog(
   project: Project,
   existingTickets: Ticket[],
   cwd: string,
-  docs?: string | null,
+  extra: ExtraKnowledge = {},
 ): Promise<BacklogDraft> {
   const key = deps.secrets.get('ANTHROPIC_API_KEY');
   const out = await deps.agent.run({
     cwd,
     prompt: 'Draft the backlog for this project now.',
-    systemPrompt: plannerSystemPrompt(project, existingTickets, docs),
+    systemPrompt: plannerSystemPrompt(project, existingTickets, extra),
     model: deps.store.getSetting('model.planner') || 'claude-opus-5-5',
     allowedTools: ['Read', 'Glob', 'Grep'],
     maxTurns: 40,

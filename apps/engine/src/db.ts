@@ -288,6 +288,9 @@ export class Store {
   setSetting(key: string, value: string): void {
     this.db.prepare('INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run(key, value);
   }
+  deleteSetting(key: string): void {
+    this.db.prepare('DELETE FROM settings WHERE key = ?').run(key);
+  }
   allSettings(): Record<string, string> {
     return Object.fromEntries((this.db.prepare('SELECT key, value FROM settings').all() as Row[]).map((r) => [r.key, r.value]));
   }

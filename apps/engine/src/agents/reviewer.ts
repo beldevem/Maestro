@@ -43,11 +43,11 @@ export const REVIEW_JSON_SCHEMA: Record<string, unknown> = {
 
 export const REVIEWER_TOOLS = ['Read', 'Glob', 'Grep', 'Bash(git diff:*)', 'Bash(git log:*)', 'Bash(git show:*)'];
 
-export function reviewerSystemPrompt(project: Project, wf: Workflow, ticket: Ticket, baseRef: string): string {
+export function reviewerSystemPrompt(project: Project, wf: Workflow, ticket: Ticket, baseRef: string, memory?: string | null): string {
   const dod = wf.definition_of_done.map((d) => `- ${d}`).join('\n') || '- (none configured)';
   return `You are the reviewer agent in Maestro. A worker agent implemented one ticket on this branch and the quality gates passed. Review the change like a careful senior engineer. You are read-only: never edit files.
 
-${projectKnowledge(project)}
+${projectKnowledge(project, { memory })}
 
 ## Ticket ${ticket.key}: ${ticket.title}
 ${ticket.description || '(no description)'}
@@ -92,11 +92,12 @@ export async function runReviewer(
   wf: Workflow,
   ticket: Ticket,
   baseRef: string,
+  memory?: string | null,
 ): Promise<ReviewResult> {
   const out = await agent.run({
     ...task,
     prompt: `Review the change for ${ticket.key} now.`,
-    systemPrompt: reviewerSystemPrompt(project, wf, ticket, baseRef),
+    systemPrompt: reviewerSystemPrompt(project, wf, ticket, baseRef, memory),
     allowedTools: REVIEWER_TOOLS,
     maxTurns: 40,
     outputSchema: REVIEW_JSON_SCHEMA,

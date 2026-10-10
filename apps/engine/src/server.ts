@@ -16,6 +16,7 @@ import type { Store } from './db.js';
 import { bus, type BusEvent } from './events.js';
 import { NotReadyError, Orchestrator } from './orchestrator.js';
 import { git } from './proc.js';
+import { readBaseMemory } from './memory.js';
 import { KNOWN_SECRETS, type SecretStore } from './secrets.js';
 import type { Agent } from './types.js';
 import { blockedBy, checkReady, parseWorkflow, validateWorkflow } from './workflow.js';
@@ -95,7 +96,8 @@ export async function buildServer(d: ServerDeps): Promise<FastifyInstance> {
       const tickets = await pmFor(p, d.store, d.secrets).listTickets();
       const cwd = existsSync(repoDir(p)) ? repoDir(p) : tmpdir();
       const docs = await docsContextFor(p, d.secrets);
-      return await draftBacklog(d, p, tickets, cwd, docs);
+      const memory = existsSync(repoDir(p)) ? await readBaseMemory(repoDir(p), parseWorkflow(p.workflowYaml).base_branch) : '';
+      return await draftBacklog(d, p, tickets, cwd, { docs, memory });
     } finally {
       planning.delete(p.id);
     }
@@ -323,6 +325,26 @@ export async function buildServer(d: ServerDeps): Promise<FastifyInstance> {
     return { ok: true };
   });
 
+  // Project memory (.maestro/memory.md). Edits wait here and are committed with the next ticket.
+  app.get<{ Params: { id: string } }>('/api/projects/:id/memory', async (req) => {
+    const p = project(req.params.id);
+    const pending = d.store.getSetting(`memory.${p.id}`);
+    if (pending !== undefined) return { content: pending, pending: true };
+    const path = await codeHostFor(p, d.secrets, d.reposDir).ensureRepo(p).catch(() => '');
+    const content = path ? await readBaseMemory(path, parseWorkflow(p.workflowYaml).base_branch) : '';
+    return { content, pending: false };
+  });
+  app.put<{ Params: { id: string } }>('/api/projects/:id/memory', async (req) => {
+    const p = project(req.params.id);
+    const { content } = z.object({ content: z.string() }).parse(req.body);
+    d.store.setSetting(`memory.${p.id}`, content);
+    return { content, pending: true };
+  });
+  app.delete<{ Params: { id: string } }>('/api/projects/:id/memory', async (req) => {
+    d.store.deleteSetting(`memory.${project(req.params.id).id}`);
+    return { ok: true };
+  });
+
   // Chat
   app.post<{ Params: { id: string } }>('/api/projects/:id/chat', async (req) => {
     const p = project(req.params.id);
@@ -365,7 +387,8 @@ export async function buildServer(d: ServerDeps): Promise<FastifyInstance> {
         'model.reviewer': 'claude-opus-5-5',
         maxConcurrentRuns: '3',
         'budget.perRunUsd': '5',
-        ...d.store.allSettings(),
+        // Per-project values (auto-assign toggle, pending memory) have their own endpoints.
+        ...Object.fromEntries(Object.entries(d.store.allSettings()).filter(([k]) => !/^(autoAssign|memory)\./.test(k))),
       },
       secrets: KNOWN_SECRETS.map((s) => ({ ...s, set: set.has(s.name) || !!process.env[s.name] })),
     };

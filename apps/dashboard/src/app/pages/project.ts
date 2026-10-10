@@ -108,6 +108,15 @@ type Tab = 'board' | 'knowledge' | 'workflow' | 'runs' | 'chat' | 'connectors';
             <label>Best practices <textarea [(ngModel)]="p.bestPractices" name="bestPractices" rows="6" placeholder="Coding standards, patterns to use or avoid"></textarea></label>
             <button class="primary" type="submit">Save</button>
           </form>
+          <form class="panel" (ngSubmit)="saveMemory()">
+            <h2>Project memory <span class="mono muted">.maestro/memory.md</span></h2>
+            <p class="hint">Learnings agents record after each ticket, kept in the repository and read by every agent. Your edits are committed with the next ticket's change{{ memoryPending() ? '; one is waiting now' : '' }}.</p>
+            <textarea class="code" [(ngModel)]="memoryText" name="memory" rows="12" spellcheck="false" placeholder="Nothing recorded yet."></textarea>
+            <div class="row">
+              <button class="primary" type="submit">Save</button>
+              @if (memoryPending()) { <button type="button" class="quiet" (click)="discardMemory()">Discard my edit</button> }
+            </div>
+          </form>
         }
 
         @case ('workflow') {
@@ -223,6 +232,8 @@ export class ProjectPage {
   readonly planning = signal(false);
   readonly planError = signal('');
   readonly draft = signal<BacklogDraft | null>(null);
+  readonly memoryPending = signal(false);
+  memoryText = '';
   newTicket = { title: '', description: '', acceptanceCriteria: '', size: '', labels: '' };
   question = '';
 
@@ -240,6 +251,7 @@ export class ProjectPage {
       void this.api.project(id).then((p) => this.project.set(p));
       void this.loadTickets();
       void this.loadDraft();
+      void this.loadMemory();
       void this.api.autoAssign(id).then((a) => this.autoAssign.set(a.enabled));
     });
     // Auto-assign moves tickets on its own; keep the board in step with runs starting and finishing.
@@ -249,6 +261,27 @@ export class ProjectPage {
       if (seen && sig !== seen) void this.loadTickets();
       seen = sig;
     });
+  }
+
+  async loadMemory(): Promise<void> {
+    const m = await this.api.memory(this.id()).catch(() => ({ content: '', pending: false }));
+    this.memoryText = m.content;
+    this.memoryPending.set(m.pending);
+  }
+
+  async saveMemory(): Promise<void> {
+    try {
+      await this.api.saveMemory(this.id(), this.memoryText);
+      this.memoryPending.set(true);
+      this.flash('Saved. It goes into the next ticket\'s commit.');
+    } catch (e) {
+      this.flash((e as Error).message);
+    }
+  }
+
+  async discardMemory(): Promise<void> {
+    await this.api.discardMemory(this.id());
+    await this.loadMemory();
   }
 
   async loadDraft(): Promise<void> {
