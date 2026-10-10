@@ -1,0 +1,12 @@
+<div class="shell">
+  <aside class="nav">
+    <div class="brand">Maestro</div>
+    <a routerLink="/agents" routerLinkActive="active">Agents</a>
+    <a routerLink="/projects" routerLinkActive="active">Projects</a>
+    <a routerLink="/settings" routerLinkActive="active">Settings</a>
+    <p class="conn" [class.on]="live.connected()">{{ live.connected() ? 'Engine connected' : 'Engine offline' }}</p>
+  </aside>
+  <main class="content">
+    <router-outlet />
+  </main>
+</div>

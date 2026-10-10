@@ -1,0 +1,54 @@
+import { Injectable } from '@angular/core';
+import type { Agent, Project, Run, RunEvent, SecretInfo, Ticket } from './models';
+
+export class ApiError extends Error {
+  constructor(message: string, readonly status: number, readonly reasons: string[] = []) {
+    super(message);
+  }
+}
+
+@Injectable({ providedIn: 'root' })
+export class Api {
+  private async call<T>(method: string, path: string, body?: unknown): Promise<T> {
+    const res = await fetch(`/api${path}`, {
+      method,
+      headers: body === undefined ? {} : { 'Content-Type': 'application/json' },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+    const data = res.headers.get('content-type')?.includes('json') ? await res.json() : undefined;
+    if (!res.ok) throw new ApiError(data?.error ?? res.statusText, res.status, data?.reasons ?? []);
+    return data as T;
+  }
+
+  projects = () => this.call<Project[]>('GET', '/projects');
+  project = (id: string) => this.call<Project>('GET', `/projects/${id}`);
+  createProject = (p: Partial<Project>) => this.call<Project>('POST', '/projects', p);
+  updateProject = (id: string, p: Partial<Project>) => this.call<Project>('PATCH', `/projects/${id}`, p);
+  deleteProject = (id: string) => this.call('DELETE', `/projects/${id}`);
+  checkProject = (id: string) => this.call<Record<string, { ok: boolean; message: string }>>('POST', `/projects/${id}/check`, {});
+
+  tickets = (projectId: string) => this.call<Ticket[]>('GET', `/projects/${projectId}/tickets`);
+  createTicket = (projectId: string, t: Partial<Ticket>) => this.call<Ticket>('POST', `/projects/${projectId}/tickets`, t);
+  startTicket = (projectId: string, key: string, force = false) =>
+    this.call<Run>('POST', `/projects/${projectId}/tickets/${encodeURIComponent(key)}/start`, { force });
+
+  runs = (projectId?: string) => this.call<Run[]>('GET', `/runs${projectId ? `?projectId=${projectId}` : ''}`);
+  run = (id: string) => this.call<Run & { active: boolean; events: RunEvent[] }>('GET', `/runs/${id}`);
+  diff = (id: string) => this.call<{ base: string; diff: string }>('GET', `/runs/${id}/diff`);
+  stopRun = (id: string) => this.call('POST', `/runs/${id}/stop`, {});
+  removeWorktree = (id: string) => this.call('DELETE', `/runs/${id}/worktree`);
+
+  agents = () => this.call<Agent[]>('GET', '/agents');
+  createAgent = (a: Partial<Agent>) => this.call<Agent>('POST', '/agents', a);
+  updateAgent = (id: string, a: Partial<Agent>) => this.call<Agent>('PATCH', `/agents/${id}`, a);
+  agentAction = (id: string, action: 'pause' | 'resume' | 'unblock') => this.call<Agent>('POST', `/agents/${id}/action`, { action });
+  deleteAgent = (id: string) => this.call('DELETE', `/agents/${id}`);
+
+  chat = (projectId: string, message: string, history: { role: 'user' | 'assistant'; content: string }[]) =>
+    this.call<{ answer: string; costUsd: number }>('POST', `/projects/${projectId}/chat`, { message, history });
+
+  settings = () => this.call<{ settings: Record<string, string>; secrets: SecretInfo[] }>('GET', '/settings');
+  saveSettings = (s: Record<string, string>) => this.call('PUT', '/settings', s);
+  setSecret = (name: string, value: string) => this.call('PUT', `/secrets/${name}`, { value });
+  deleteSecret = (name: string) => this.call('DELETE', `/secrets/${name}`);
+}

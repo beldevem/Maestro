@@ -1,0 +1,15 @@
+{
+  "name": "maestro",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Dashboard to orchestrate, monitor and configure coding agents across projects.",
+  "scripts": {
+    "setup": "npm --prefix apps/engine ci && npm --prefix apps/dashboard ci",
+    "dev:engine": "npm --prefix apps/engine run dev",
+    "dev:dashboard": "npm --prefix apps/dashboard start",
+    "build": "npm --prefix apps/dashboard run build",
+    "start": "npm --prefix apps/engine start",
+    "test": "npm --prefix apps/engine test && npm --prefix apps/engine run typecheck && npm --prefix apps/dashboard test"
+  },
+  "engines": { "node": ">=22.22.3" }
+}
