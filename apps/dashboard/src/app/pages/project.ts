@@ -160,7 +160,9 @@ type Tab = 'board' | 'knowledge' | 'workflow' | 'runs' | 'chat' | 'connectors';
         @case ('chat') {
           <section class="chat panel">
             @if (messages().length === 0) {
-              <p class="hint">Ask about this project: tickets, why an agent is blocked, how the code works.</p>
+              <p class="hint">Ask about this project: tickets, why an agent is blocked, how the code works. Ask it to do something and it proposes the action for you to confirm.</p>
+            } @else {
+              <button type="button" class="quiet chat-clear" (click)="clearChat()">Clear conversation</button>
             }
             @for (m of messages(); track $index) {
               <div class="msg msg-{{ m.role }}">{{ m.content }}</div>
@@ -264,6 +266,7 @@ export class ProjectPage {
       void this.loadTickets();
       void this.loadDraft();
       void this.loadMemory();
+      void this.api.chatHistory(id).then((m) => this.messages.set(m)).catch(() => undefined);
       void this.loadSpend();
       void this.api.autoAssign(id).then((a) => this.autoAssign.set(a.enabled));
     });
@@ -427,12 +430,11 @@ export class ProjectPage {
   async send(): Promise<void> {
     const message = this.question.trim();
     if (!message) return;
-    const history = this.messages().map(({ role, content }) => ({ role, content }));
     this.messages.update((m) => [...m, { role: 'user', content: message }]);
     this.question = '';
     this.thinking.set(true);
     try {
-      const { answer, actions } = await this.api.chat(this.id(), message, history);
+      const { answer, actions } = await this.api.chat(this.id(), message);
       this.messages.update((m) => [...m, { role: 'assistant', content: answer, actions: actions.map((a) => ({ ...a, state: 'pending' as const })) }]);
     } catch (e) {
       this.messages.update((m) => [...m, { role: 'assistant', content: `Couldn't answer: ${(e as Error).message}` }]);
@@ -451,6 +453,12 @@ export class ProjectPage {
     } catch (e) {
       this.setAction(a.id, { state: 'failed', result: (e as Error).message });
     }
+  }
+
+  async clearChat(): Promise<void> {
+    if (!confirm('Clear this conversation? Proposed actions that were not confirmed are dropped.')) return;
+    await this.api.clearChat(this.id());
+    this.messages.set([]);
   }
 
   async dismissAction(a: ChatAction): Promise<void> {

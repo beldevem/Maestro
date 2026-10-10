@@ -1,6 +1,6 @@
 import { DatabaseSync } from 'node:sqlite';
 import { randomUUID } from 'node:crypto';
-import type { Agent, Alert, AlertKind, BacklogDraft, BacklogItem, Project, Review, Run, RunEvent, RunEventKind, SpendKind, Ticket } from './types.js';
+import type { Agent, Alert, AlertKind, BacklogDraft, ChatActionStatus, ChatMessage, StoredChatAction, BacklogItem, Project, Review, Run, RunEvent, RunEventKind, SpendKind, Ticket } from './types.js';
 import { DEFAULT_WORKFLOW_YAML } from './workflow.js';
 
 const SCHEMA = `
@@ -49,6 +49,14 @@ CREATE INDEX IF NOT EXISTS spend_project_ts ON spend(project_id, ts);
 CREATE TABLE IF NOT EXISTS alerts (
   id INTEGER PRIMARY KEY AUTOINCREMENT, project_id TEXT, run_id TEXT, kind TEXT NOT NULL, message TEXT NOT NULL,
   read INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS chat_messages (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, project_id TEXT NOT NULL, role TEXT NOT NULL, content TEXT NOT NULL, created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS chat_messages_project ON chat_messages(project_id);
+CREATE TABLE IF NOT EXISTS chat_actions (
+  id TEXT PRIMARY KEY, project_id TEXT NOT NULL, message_id INTEGER NOT NULL, type TEXT NOT NULL, summary TEXT NOT NULL,
+  action TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending', result TEXT, run_id TEXT, created_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS ticket_deps (
   project_id TEXT NOT NULL, ticket_key TEXT NOT NULL, depends_on_key TEXT NOT NULL,
@@ -126,6 +134,7 @@ export class Store {
     this.db.prepare('DELETE FROM runs WHERE project_id = ?').run(id);
     this.db.prepare('DELETE FROM alerts WHERE project_id = ?').run(id);
     this.db.prepare('DELETE FROM spend WHERE project_id = ?').run(id);
+    this.clearChat(id);
     this.db.prepare('DELETE FROM projects WHERE id = ?').run(id);
     this.db.prepare('DELETE FROM manual_tickets WHERE project_id = ?').run(id);
     this.db.prepare('DELETE FROM backlog_drafts WHERE project_id = ?').run(id);
@@ -303,6 +312,40 @@ export class Store {
     return map;
   }
 
+  // Chat with the project's assistant, kept so the conversation and proposed actions survive reloads
+  addChatMessage(projectId: string, role: ChatMessage['role'], content: string): ChatMessage {
+    const createdAt = now();
+    const res = this.db.prepare('INSERT INTO chat_messages (project_id, role, content, created_at) VALUES (?, ?, ?, ?)').run(projectId, role, content, createdAt);
+    return { id: Number(res.lastInsertRowid), role, content, createdAt, actions: [] };
+  }
+  addChatAction(projectId: string, messageId: number, a: { type: string; summary: string; action: unknown }): StoredChatAction {
+    const x: StoredChatAction = { id: randomUUID(), type: a.type, summary: a.summary, action: a.action, state: 'pending', result: null, runId: null, createdAt: now() };
+    this.db
+      .prepare('INSERT INTO chat_actions (id, project_id, message_id, type, summary, action, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+      .run(x.id, projectId, messageId, x.type, x.summary, JSON.stringify(x.action), x.state, x.createdAt);
+    return x;
+  }
+  getChatAction(projectId: string, id: string): StoredChatAction | undefined {
+    const row = this.db.prepare('SELECT * FROM chat_actions WHERE project_id = ? AND id = ?').get(projectId, id) as Row | undefined;
+    return row ? toChatAction(row) : undefined;
+  }
+  /** Moves an action out of pending; returns false when it was not pending any more (so it runs at most once). */
+  claimChatAction(id: string, state: ChatActionStatus): boolean {
+    return this.db.prepare("UPDATE chat_actions SET status = ? WHERE id = ? AND status = 'pending'").run(state, id).changes === 1;
+  }
+  finishChatAction(id: string, state: ChatActionStatus, result: string, runId: string | null = null): void {
+    this.db.prepare('UPDATE chat_actions SET status = ?, result = ?, run_id = ? WHERE id = ?').run(state, result, runId, id);
+  }
+  listChat(projectId: string, limit = 100): ChatMessage[] {
+    const rows = (this.db.prepare('SELECT * FROM chat_messages WHERE project_id = ? ORDER BY id DESC LIMIT ?').all(projectId, limit) as Row[]).reverse();
+    const actions = this.db.prepare('SELECT * FROM chat_actions WHERE message_id = ? ORDER BY rowid');
+    return rows.map((r) => ({ id: r.id, role: r.role, content: r.content, createdAt: r.created_at, actions: (actions.all(r.id) as Row[]).map(toChatAction) }));
+  }
+  clearChat(projectId: string): void {
+    this.db.prepare('DELETE FROM chat_actions WHERE project_id = ?').run(projectId);
+    this.db.prepare('DELETE FROM chat_messages WHERE project_id = ?').run(projectId);
+  }
+
   // Spend ledger: every agent call's cost, so budgets and the overview don't depend on run rows alone
   addSpend(projectId: string, runId: string | null, kind: SpendKind, usd: number): void {
     if (usd > 0) this.db.prepare('INSERT INTO spend (project_id, run_id, kind, usd, ts) VALUES (?, ?, ?, ?, ?)').run(projectId, runId, kind, usd, now());
@@ -370,6 +413,12 @@ function toRun(r: Row): Run {
     prUrl: r.pr_url ?? null, error: r.error ?? null, area: r.area ?? null, sessionId: r.session_id ?? null, baseRef: r.base_ref ?? null,
     prNumber: r.pr_number ?? null, reviewRounds: r.review_rounds ?? 0, checks: r.checks ?? null, readyAt: r.ready_at ?? null,
     startedAt: r.started_at, endedAt: r.ended_at ?? null,
+  };
+}
+function toChatAction(r: Row): StoredChatAction {
+  return {
+    id: r.id, type: r.type, summary: r.summary, action: JSON.parse(r.action), state: r.status, result: r.result ?? null,
+    runId: r.run_id ?? null, createdAt: r.created_at,
   };
 }
 function toReview(r: Row): Review {

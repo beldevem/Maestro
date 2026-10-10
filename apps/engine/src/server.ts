@@ -1,7 +1,6 @@
 import Fastify, { type FastifyInstance } from 'fastify';
 import cors from '@fastify/cors';
 import fastifyStatic from '@fastify/static';
-import { randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -10,7 +9,7 @@ import { codeHostFor, missingCredentials } from './adapters/codehost/index.js';
 import { pmFor } from './adapters/pm/index.js';
 import { docPageIds, docsContextFor } from './adapters/docs/index.js';
 import { FigmaClient, fileKeyFrom } from './adapters/design/figma.js';
-import { askAssistant, describeAction, type ProposedAction } from './agents/assistant.js';
+import { askAssistant, describeAction, proposedActionSchema, type ProposedAction } from './agents/assistant.js';
 import { approveDraft, backlogItemSchema, cleanItems, draftBacklog } from './agents/planner.js';
 import type { CodingAgent } from './agents/coding-agent.js';
 import type { Store } from './db.js';
@@ -165,8 +164,7 @@ export async function buildServer(d: ServerDeps): Promise<FastifyInstance> {
     return updated;
   };
 
-  /** Actions the chat proposed, kept until you confirm or they expire; each runs at most once. */
-  const proposals = new Map<string, { projectId: string; action: ProposedAction; expires: number }>();
+  /** Proposed actions can be confirmed for an hour; each runs at most once. */
   const PROPOSAL_TTL_MS = 60 * 60_000;
   const runAction = async (p: ReturnType<typeof project>, a: ProposedAction): Promise<{ message: string; runId?: string }> => {
     const pm = pmFor(p, d.store, d.secrets);
@@ -416,35 +414,44 @@ export async function buildServer(d: ServerDeps): Promise<FastifyInstance> {
     return { ok: true };
   });
 
-  // Chat
+  // Chat (kept per project)
+  app.get<{ Params: { id: string } }>('/api/projects/:id/chat', async (req) => d.store.listChat(project(req.params.id).id));
+  app.delete<{ Params: { id: string } }>('/api/projects/:id/chat', async (req) => {
+    d.store.clearChat(project(req.params.id).id);
+    return { ok: true };
+  });
   app.post<{ Params: { id: string } }>('/api/projects/:id/chat', async (req) => {
     const p = project(req.params.id);
-    const body = z
-      .object({ message: z.string().min(1), history: z.array(z.object({ role: z.enum(['user', 'assistant']), content: z.string() })).default([]) })
-      .parse(req.body);
+    const { message } = z.object({ message: z.string().min(1) }).parse(req.body);
+    const history = d.store.listChat(p.id, 20).map(({ role, content }) => ({ role, content }));
     const tickets = await pmFor(p, d.store, d.secrets).listTickets().catch(() => []);
-    const reply = await askAssistant(d, p, tickets, repoDir(p), body.history, body.message);
+    const reply = await askAssistant(d, p, tickets, repoDir(p), history, message);
     d.store.addSpend(p.id, null, 'chat', reply.costUsd);
-    const now = Date.now();
-    for (const [id, x] of proposals) if (x.expires < now) proposals.delete(id);
-    const actions = reply.actions.map((action) => {
-      const id = randomUUID();
-      proposals.set(id, { projectId: p.id, action, expires: now + PROPOSAL_TTL_MS });
-      return { id, type: action.type, summary: describeAction(action), action };
-    });
-    return { answer: reply.answer, costUsd: reply.costUsd, actions };
+    d.store.addChatMessage(p.id, 'user', message);
+    const answer = d.store.addChatMessage(p.id, 'assistant', reply.answer);
+    answer.actions = reply.actions.map((action) => d.store.addChatAction(p.id, answer.id, { type: action.type, summary: describeAction(action), action }));
+    return { ...answer, answer: reply.answer, costUsd: reply.costUsd };
   });
   app.post<{ Params: { id: string; actionId: string } }>('/api/projects/:id/chat/actions/:actionId', async (req) => {
     const p = project(req.params.id);
-    const proposal = proposals.get(req.params.actionId);
-    if (!proposal || proposal.projectId !== p.id || proposal.expires < Date.now()) {
+    const stored = d.store.getChatAction(p.id, req.params.actionId);
+    const fresh = stored && Date.now() - new Date(stored.createdAt).getTime() < PROPOSAL_TTL_MS;
+    if (!stored || !fresh || !d.store.claimChatAction(stored.id, 'done')) {
       throw Object.assign(new Error('This proposal has expired or was already used. Ask again.'), { statusCode: 404 });
     }
-    proposals.delete(req.params.actionId);
-    return runAction(p, proposal.action);
+    try {
+      const result = await runAction(p, proposedActionSchema.parse(stored.action));
+      d.store.finishChatAction(stored.id, 'done', result.message, result.runId ?? null);
+      return result;
+    } catch (e) {
+      d.store.finishChatAction(stored.id, 'failed', (e as Error).message);
+      throw e;
+    }
   });
   app.delete<{ Params: { id: string; actionId: string } }>('/api/projects/:id/chat/actions/:actionId', async (req) => {
-    proposals.delete(req.params.actionId);
+    const p = project(req.params.id);
+    const stored = d.store.getChatAction(p.id, req.params.actionId);
+    if (stored && d.store.claimChatAction(stored.id, 'dismissed')) d.store.finishChatAction(stored.id, 'dismissed', 'Dismissed');
     return { ok: true };
   });
 

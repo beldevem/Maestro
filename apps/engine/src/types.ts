@@ -149,6 +149,27 @@ export interface BacklogDraft {
   approvedAt: string | null;
 }
 
+export type ChatActionStatus = 'pending' | 'done' | 'dismissed' | 'failed';
+
+export interface StoredChatAction {
+  id: string;
+  type: string;
+  summary: string;
+  action: unknown;
+  state: ChatActionStatus;
+  result: string | null;
+  runId: string | null;
+  createdAt: string;
+}
+
+export interface ChatMessage {
+  id: number;
+  role: 'user' | 'assistant';
+  content: string;
+  createdAt: string;
+  actions: StoredChatAction[];
+}
+
 export type SpendKind = 'worker' | 'reviewer' | 'planner' | 'chat';
 
 export type AlertKind = 'blocked' | 'failed' | 'budget' | 'ready';

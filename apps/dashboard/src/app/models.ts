@@ -194,8 +194,10 @@ export interface ChatAction {
 }
 
 export interface ChatMessage {
+  id?: number;
   role: 'user' | 'assistant';
   content: string;
+  createdAt?: string;
   actions?: ChatAction[];
 }
 

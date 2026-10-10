@@ -175,3 +175,4 @@ details { margin-bottom: 12px; }
 .tile-value { font-size: 26px; font-weight: 650; font-variant-numeric: tabular-nums; color: var(--text); }
 .tile-note { font-size: 12px; color: var(--muted); }
 .table .num { text-align: right; font-variant-numeric: tabular-nums; }
+.chat-clear { align-self: flex-end; font-size: 12px; }

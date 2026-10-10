@@ -1,5 +1,5 @@
 import { Injectable } from '@angular/core';
-import type { Agent, Alert, BacklogDraft, ChatAction, Metrics, ProjectTemplate, ProjectSpend, BacklogItem, Project, PullRequestRow, Review, ReviewComment, Run, RunEvent, SecretInfo, Ticket, TicketStatus } from './models';
+import type { Agent, Alert, BacklogDraft, ChatAction, ChatMessage, Metrics, ProjectTemplate, ProjectSpend, BacklogItem, Project, PullRequestRow, Review, ReviewComment, Run, RunEvent, SecretInfo, Ticket, TicketStatus } from './models';
 
 export class ApiError extends Error {
   constructor(message: string, readonly status: number, readonly reasons: string[] = []) {
@@ -66,8 +66,10 @@ export class Api {
   agentAction = (id: string, action: 'pause' | 'resume' | 'unblock') => this.call<Agent>('POST', `/agents/${id}/action`, { action });
   deleteAgent = (id: string) => this.call('DELETE', `/agents/${id}`);
 
-  chat = (projectId: string, message: string, history: { role: 'user' | 'assistant'; content: string }[]) =>
-    this.call<{ answer: string; costUsd: number; actions: ChatAction[] }>('POST', `/projects/${projectId}/chat`, { message, history });
+  chatHistory = (projectId: string) => this.call<ChatMessage[]>('GET', `/projects/${projectId}/chat`);
+  clearChat = (projectId: string) => this.call('DELETE', `/projects/${projectId}/chat`);
+  chat = (projectId: string, message: string) =>
+    this.call<ChatMessage & { answer: string; costUsd: number; actions: ChatAction[] }>('POST', `/projects/${projectId}/chat`, { message });
   confirmAction = (projectId: string, actionId: string) =>
     this.call<{ message: string; runId?: string }>('POST', `/projects/${projectId}/chat/actions/${actionId}`, {});
   dismissAction = (projectId: string, actionId: string) => this.call('DELETE', `/projects/${projectId}/chat/actions/${actionId}`);

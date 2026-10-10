@@ -93,6 +93,37 @@ describe('chat actions', () => {
     await app.close();
   });
 
+  it('keeps the conversation and action states, and gives the assistant the history', async () => {
+    const agent = new FakeAssistant({ structured: { answer: 'Shall I add it?', actions: [{ type: 'create_ticket', title: 'Add logout' }] } });
+    const { app, store, p } = await setup(agent);
+    const first = (await app.inject({ method: 'POST', url: `/api/projects/${p.id}/chat`, payload: { message: 'We need logout' } })).json();
+    await app.inject({ method: 'POST', url: `/api/projects/${p.id}/chat/actions/${first.actions[0].id}` });
+    await app.inject({ method: 'POST', url: `/api/projects/${p.id}/chat`, payload: { message: 'Thanks' } });
+    expect(agent.tasks[1].prompt).toBe('User: We need logout\n\nAssistant: Shall I add it?\n\nUser: Thanks');
+
+    const history = (await app.inject({ method: 'GET', url: `/api/projects/${p.id}/chat` })).json();
+    expect(history.map((m: { role: string; content: string }) => `${m.role}: ${m.content}`)).toEqual([
+      'user: We need logout', 'assistant: Shall I add it?', 'user: Thanks', 'assistant: Shall I add it?',
+    ]);
+    expect(history[1].actions[0]).toMatchObject({ summary: 'Create ticket "Add logout"', state: 'done', result: 'Created CHA-2.' });
+    expect(history[3].actions[0].state).toBe('pending');
+
+    // A new engine (restart) still knows the pending proposal, and a cleared chat forgets it.
+    expect(store.getChatAction(p.id, history[3].actions[0].id)!.state).toBe('pending');
+    await app.inject({ method: 'DELETE', url: `/api/projects/${p.id}/chat` });
+    expect((await app.inject({ method: 'GET', url: `/api/projects/${p.id}/chat` })).json()).toEqual([]);
+    expect((await app.inject({ method: 'POST', url: `/api/projects/${p.id}/chat/actions/${history[3].actions[0].id}` })).statusCode).toBe(404);
+    await app.close();
+  });
+
+  it('records a failed action', async () => {
+    const { app, store, p } = await setup(new FakeAssistant({ structured: { answer: 'Moving it.', actions: [{ type: 'move_ticket', ticketKey: 'CHA-99', status: 'done' }] } }));
+    const id = (await app.inject({ method: 'POST', url: `/api/projects/${p.id}/chat`, payload: { message: 'close CHA-99' } })).json().actions[0].id;
+    await app.inject({ method: 'POST', url: `/api/projects/${p.id}/chat/actions/${id}` });
+    expect(store.getChatAction(p.id, id)).toMatchObject({ state: 'failed', result: 'Ticket CHA-99 not found.' });
+    await app.close();
+  });
+
   it('drops malformed actions', () => {
     expect(parseActions([{ type: 'assign', ticketKey: 'A-1' }, { type: 'assign' }, null, 'x'])).toEqual([{ type: 'assign', ticketKey: 'A-1' }]);
     expect(parseActions(undefined)).toEqual([]);
