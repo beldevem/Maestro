@@ -7,9 +7,10 @@ export const MEMORY_FILE = '.maestro/memory.md';
 const HEADER = '# Project memory\n\nLearnings Maestro agents recorded while working on this repository. Edit freely.\n';
 const PROMPT_CHARS = 8000;
 
-/** The memory on the base branch (the remote's copy when there is one), or ''. */
-export async function readBaseMemory(repoPath: string, base: string): Promise<string> {
-  return (await readMemoryAt(repoPath, `origin/${base}`)) || readMemoryAt(repoPath, base);
+/** The memory on the base branch, or ''. A local folder's own branch wins; a clone reads its remote's copy first. */
+export async function readBaseMemory(repoPath: string, base: string, preferLocal = false): Promise<string> {
+  const [first, second] = preferLocal ? [base, `origin/${base}`] : [`origin/${base}`, base];
+  return (await readMemoryAt(repoPath, first)) || readMemoryAt(repoPath, second);
 }
 
 /** The memory on a ref (e.g. the base branch), or '' when there is none. */

@@ -101,6 +101,22 @@ describe('worker run end to end on a local repo', () => {
     expect(store.listEvents(run.id).some((e) => e.kind === 'gate' && e.message.startsWith('FAIL'))).toBe(true);
   });
 
+  it('starts a local project from your local branch, even when its remote copy is behind', async () => {
+    const remote = join(home, 'remote.git');
+    await git(home, ['clone', '--bare', '-q', repo, remote]);
+    await git(repo, ['remote', 'add', 'origin', remote]);
+    await git(repo, ['fetch', '-q', 'origin']);
+    writeFileSync(join(repo, 'local.txt'), 'unpushed\n');
+    await git(repo, ['add', '.']);
+    await git(repo, ['-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-m', 'unpushed work']);
+    const { orchestrator, project } = setup(new FakeAgent());
+    const ticket = store.createManualTicket(project.id, 'DEM', { title: 'Say hello', description: '', acceptanceCriteria: 'x', labels: [] });
+    const run = await orchestrator.start(project.id, ticket.key);
+    expect(run.baseRef).toBe('main');
+    expect(readFileSync(join(run.worktree, 'local.txt'), 'utf8')).toBe('unpushed\n');
+    await waitFor(() => settled(store.getRun(run.id)!.status));
+  });
+
   it('blocks the agent when the gate keeps failing', async () => {
     const { orchestrator, project, worker } = setup(new FakeAgent(true));
     const ticket = store.createManualTicket(project.id, 'DEM', { title: 'Say hello', description: '', acceptanceCriteria: 'x', labels: [] });

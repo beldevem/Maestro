@@ -127,7 +127,7 @@ export class Orchestrator {
     const codeHost = this.host(project);
     const repoPath = await codeHost.ensureRepo(project);
     if (wf.pull_before_start) await codeHost.syncBase(repoPath, wf.base_branch, project);
-    const baseRef = await this.resolveBase(repoPath, wf.base_branch);
+    const baseRef = await this.resolveBase(repoPath, wf.base_branch, project.codeHost.provider === 'local');
 
     let branch = branchName(wf.branch_pattern, ticket);
     if (await this.branchExists(repoPath, branch)) branch = `${branch}-${Date.now().toString(36)}`;
@@ -733,8 +733,9 @@ export class Orchestrator {
     await this.tick();
   }
 
-  private async resolveBase(repoPath: string, base: string): Promise<string> {
-    for (const ref of [`origin/${base}`, base]) {
+  /** A local folder's own branch is the truth (you may have unpushed commits); a clone follows its remote. */
+  private async resolveBase(repoPath: string, base: string, preferLocal: boolean): Promise<string> {
+    for (const ref of preferLocal ? [base, `origin/${base}`] : [`origin/${base}`, base]) {
       if (await git(repoPath, ['rev-parse', '--verify', '--quiet', `${ref}^{commit}`]).then(() => true, () => false)) return ref;
     }
     throw new Error(`Base branch "${base}" was not found in the repository.`);

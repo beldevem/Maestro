@@ -142,7 +142,7 @@ export async function buildServer(d: ServerDeps): Promise<FastifyInstance> {
       });
       const cwd = repo && existsSync(repo) ? repo : tmpdir();
       const docs = await docsContextFor(p, d.secrets);
-      const memory = repo ? await readBaseMemory(repo, parseWorkflow(p.workflowYaml).base_branch) : '';
+      const memory = repo ? await readBaseMemory(repo, parseWorkflow(p.workflowYaml).base_branch, p.codeHost.provider === 'local') : '';
       const draft = await draftBacklog(d, p, tickets, cwd, { docs, memory });
       d.store.addSpend(p.id, null, 'planner', draft.costUsd);
       return draft;
@@ -397,7 +397,7 @@ export async function buildServer(d: ServerDeps): Promise<FastifyInstance> {
     if (pending !== undefined) return { content: pending, pending: true };
     // Only read what is already on disk: viewing the Knowledge tab must not clone the repository.
     const path = repoDir(p);
-    const content = existsSync(path) ? await readBaseMemory(path, parseWorkflow(p.workflowYaml).base_branch) : '';
+    const content = existsSync(path) ? await readBaseMemory(path, parseWorkflow(p.workflowYaml).base_branch, p.codeHost.provider === 'local') : '';
     return { content, pending: false };
   });
   app.put<{ Params: { id: string } }>('/api/projects/:id/memory', async (req) => {
