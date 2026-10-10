@@ -86,6 +86,17 @@ describe('Jira', () => {
     expect(decodeURIComponent(api.calls[0].url)).toContain('project = "APP" ORDER BY rank ASC');
   });
 
+  it('follows page tokens to list every issue', async () => {
+    const api = fakeApi({
+      'GET /rest/api/3/search/jql': (c) => c.url.includes('nextPageToken=p2')
+        ? [200, { issues: [issue('APP-3', 'To Do', 'new', null)], isLast: true }]
+        : [200, { issues: [issue('APP-1', 'To Do', 'new', null), issue('APP-2', 'To Do', 'new', null)], nextPageToken: 'p2', isLast: false }],
+    });
+    const tickets = await new JiraPm(settings, () => 'tok', api.impl).listTickets();
+    expect(tickets.map((t) => t.key)).toEqual(['APP-1', 'APP-2', 'APP-3']);
+    expect(api.calls).toHaveLength(2);
+  });
+
   it('moves an issue through the matching transition, and leaves it when there is none', async () => {
     const api = fakeApi({
       'GET /transitions': [200, { transitions: [{ id: '11', name: 'Start', to: { name: 'In Progress' } }, { id: '21', name: 'Send to review', to: { name: 'Code Review' } }] }],

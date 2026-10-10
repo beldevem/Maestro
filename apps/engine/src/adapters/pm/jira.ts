@@ -109,12 +109,19 @@ export class JiraPm implements PmAdapter {
     };
   }
 
+  /** Every issue of the project in rank order, following Jira's page tokens (up to 1,000 issues). */
   async listTickets(): Promise<Ticket[]> {
     const jql = encodeURIComponent(`project = "${this.s.projectKey}" ORDER BY rank ASC`);
-    const data = await this.call<{ issues: any[] }>(
-      `/rest/api/3/search/jql?jql=${jql}&maxResults=100&fields=summary,description,status,labels`,
-    );
-    return data.issues.map((i) => this.toTicket(i));
+    const issues: any[] = [];
+    let token: string | undefined;
+    do {
+      const page = await this.call<{ issues: any[]; nextPageToken?: string; isLast?: boolean }>(
+        `/rest/api/3/search/jql?jql=${jql}&maxResults=100&fields=summary,description,status,labels${token ? `&nextPageToken=${encodeURIComponent(token)}` : ''}`,
+      );
+      issues.push(...page.issues);
+      token = page.isLast === false || (page.isLast === undefined && page.nextPageToken) ? page.nextPageToken : undefined;
+    } while (token && issues.length < 1000);
+    return issues.map((i) => this.toTicket(i));
   }
 
   async getTicket(key: string): Promise<Ticket | undefined> {
