@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { codeHostFor, type CodeHostAdapter } from './adapters/codehost/index.js';
+import { codeHostFor, missingCredentials, type CodeHostAdapter } from './adapters/codehost/index.js';
 import { DESIGN_DIR, designContextFor } from './adapters/design/index.js';
 import { docsContextFor } from './adapters/docs/index.js';
 import { pmFor } from './adapters/pm/index.js';
@@ -95,6 +95,10 @@ export class Orchestrator {
 
     const reasons = checkReady(wf, ticket);
     if (reasons.length && !opts.force) throw new NotReadyError(reasons);
+    if (!this.d.codeHostFor) {
+      const missing = missingCredentials(project, this.d.secrets);
+      if (missing) throw new Error(missing);
+    }
     const budget = budgetState(store, projectId);
     if (budget.over) throw new Error(`${project.name} has reached its daily budget of ${usd(budget.cap)}. Raise it on the Runs tab or wait until tomorrow.`);
 

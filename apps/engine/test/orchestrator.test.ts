@@ -117,6 +117,20 @@ describe('worker run end to end on a local repo', () => {
     await waitFor(() => settled(store.getRun(run.id)!.status));
   });
 
+  it('refuses to start a GitHub ticket without a token, before any agent work', async () => {
+    const agent = new FakeAgent();
+    const orchestrator = new Orchestrator({ store, secrets, agent, reposDir: join(home, 'repos'), worktreesDir: join(home, 'wt') });
+    const project = store.createProject({
+      name: 'Gh', description: '', codeHost: { provider: 'github', repo: 'me/app', defaultBranch: 'main' },
+      pm: { provider: 'manual', settings: {} }, design: { provider: 'none', settings: {} }, context: '', requirements: '', bestPractices: '',
+    });
+    store.createAgent({ name: 'W', role: 'worker', model: '' });
+    const ticket = store.createManualTicket(project.id, 'GH', { title: 'x', description: '', acceptanceCriteria: 'x', labels: [] });
+    await expect(orchestrator.start(project.id, ticket.key)).rejects.toThrow(/Add a GitHub token in Settings first/);
+    expect(agent.calls).toHaveLength(0);
+    expect(store.listRuns(project.id)).toHaveLength(0);
+  });
+
   it('blocks the agent when the gate keeps failing', async () => {
     const { orchestrator, project, worker } = setup(new FakeAgent(true));
     const ticket = store.createManualTicket(project.id, 'DEM', { title: 'Say hello', description: '', acceptanceCriteria: 'x', labels: [] });

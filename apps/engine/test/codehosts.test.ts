@@ -118,3 +118,20 @@ describe('Bitbucket', () => {
     await expect(new BitbucketCodeHost(() => undefined, '/tmp').openPullRequest(p, { branch: 'b', base: 'main', title: 't', body: '', draft: true })).rejects.toThrow(/app password/);
   });
 });
+
+describe('credentials check before a run', () => {
+  it('names what is missing for each remote code host', async () => {
+    const { missingCredentials } = await import('../src/adapters/codehost/index.js');
+    const { SecretStore } = await import('../src/secrets.js');
+    const { mkdtempSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    const secrets = new SecretStore(join(mkdtempSync(join(tmpdir(), 'maestro-creds-')), 's.json'));
+    expect(missingCredentials(project('github', 'a/b'), secrets)).toMatch(/GitHub token/);
+    expect(missingCredentials(project('gitlab', 'a/b'), secrets)).toMatch(/GitLab token/);
+    expect(missingCredentials(project('bitbucket', 'a/b'), secrets)).toMatch(/Bitbucket username and app password/);
+    expect(missingCredentials(project('local', ''), secrets)).toBeNull();
+    secrets.set('GITHUB_TOKEN', 'x');
+    expect(missingCredentials(project('github', 'a/b'), secrets)).toBeNull();
+  });
+});
