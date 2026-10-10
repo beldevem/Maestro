@@ -6,9 +6,10 @@ import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { z } from 'zod';
-import { codeHostFor } from './adapters/codehost/index.js';
+import { codeHostFor, missingCredentials } from './adapters/codehost/index.js';
 import { pmFor } from './adapters/pm/index.js';
-import { docsContextFor } from './adapters/docs/index.js';
+import { docPageIds, docsContextFor } from './adapters/docs/index.js';
+import { FigmaClient, fileKeyFrom } from './adapters/design/figma.js';
 import { askAssistant, describeAction, type ProposedAction } from './agents/assistant.js';
 import { approveDraft, backlogItemSchema, cleanItems, draftBacklog } from './agents/planner.js';
 import type { CodingAgent } from './agents/coding-agent.js';
@@ -522,7 +523,8 @@ export async function buildServer(d: ServerDeps): Promise<FastifyInstance> {
     const result: Record<string, { ok: boolean; message: string }> = {};
     try {
       const path = await codeHostFor(p, d.secrets, d.reposDir).ensureRepo(p);
-      result.codeHost = { ok: true, message: `Repository ready at ${path}` };
+      const missing = missingCredentials(p, d.secrets);
+      result.codeHost = missing ? { ok: false, message: `Repository at ${path}, but: ${missing}` } : { ok: true, message: `Repository ready at ${path}` };
     } catch (e) {
       result.codeHost = { ok: false, message: (e as Error).message };
     }
@@ -531,6 +533,33 @@ export async function buildServer(d: ServerDeps): Promise<FastifyInstance> {
       result.pm = { ok: true, message: `${n} tickets found` };
     } catch (e) {
       result.pm = { ok: false, message: (e as Error).message };
+    }
+    if (p.design.provider === 'figma') {
+      const file = fileKeyFrom(p.design.settings['file']);
+      const token = d.secrets.get('FIGMA_TOKEN');
+      if (!token) result.design = { ok: false, message: 'Add the Figma token in Settings.' };
+      else if (!file) result.design = { ok: true, message: 'Token set. No file on the project: only tickets that link a frame get designs.' };
+      else {
+        try {
+          const o = await new FigmaClient(token).fileOverview(file);
+          result.design = { ok: true, message: `"${o.name}": ${o.pages.length} pages` };
+        } catch (e) {
+          result.design = { ok: false, message: (e as Error).message };
+        }
+      }
+    }
+    if (p.docs.provider === 'confluence') {
+      try {
+        const ids = docPageIds(p);
+        const text = ids.length ? await docsContextFor({ ...p, docs: { ...p.docs, settings: { ...p.docs.settings, pages: ids[0] } }, requirements: '', context: '' }, d.secrets) : null;
+        result.docs = !ids.length
+          ? { ok: true, message: 'No pages listed yet; pages linked in tickets are read when a worker starts.' }
+          : text?.includes('(Could not be read')
+            ? { ok: false, message: text.split('\n')[1].replace(/^\(|\)$/g, '') }
+            : { ok: true, message: `Read "${text?.split('\n')[0].replace(/^### /, '')}"${ids.length > 1 ? ` (${ids.length} pages in all)` : ''}` };
+      } catch (e) {
+        result.docs = { ok: false, message: (e as Error).message };
+      }
     }
     return result;
   });

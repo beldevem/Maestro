@@ -408,7 +408,7 @@ export class ProjectPage {
 
   async check(): Promise<void> {
     const res = await this.api.checkProject(this.id());
-    const names: Record<string, string> = { codeHost: 'Code host', pm: 'PM tool' };
+    const names: Record<string, string> = { codeHost: 'Code host', pm: 'PM tool', design: 'Figma', docs: 'Confluence' };
     this.checks.set(Object.entries(res).map(([k, v]) => ({ name: names[k] ?? k, ...v })));
   }
 

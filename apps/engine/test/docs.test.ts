@@ -109,3 +109,29 @@ describe('docs in agent prompts', () => {
     }
   });
 });
+
+describe('connection check', () => {
+  it('reports Confluence and code host credentials', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'maestro-docs-check-'));
+    const store = new Store(join(home, 'db.sqlite'));
+    const s = secrets();
+    const agent: CodingAgent = { run: async () => ({ sessionId: null, text: '', costUsd: 0, ok: true }) };
+    const app = await buildServer({ store, secrets: s, agent, orchestrator: new Orchestrator({ store, secrets: s, agent, reposDir: home, worktreesDir: home }), reposDir: home });
+    const p = store.createProject({ ...project(), codeHost: { provider: 'local', localPath: join(home, 'none'), defaultBranch: 'main' }, docs: { provider: 'confluence', settings: { pages: '111\n999' } } });
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = fakeConfluence();
+    try {
+      const res = (await app.inject({ method: 'POST', url: `/api/projects/${p.id}/check` })).json();
+      expect(res.docs).toEqual({ ok: true, message: 'Read "Product spec" (3 pages in all)' });
+      expect(res.codeHost.ok).toBe(false);
+      store.updateProject(p.id, { docs: { provider: 'confluence', settings: { pages: '999' } } });
+      const bad = (await app.inject({ method: 'POST', url: `/api/projects/${p.id}/check` })).json();
+      expect(bad.docs.ok).toBe(false);
+      expect(bad.docs.message).toMatch(/Could not be read|404/);
+    } finally {
+      globalThis.fetch = realFetch;
+      await app.close();
+      store.db.close();
+    }
+  });
+});
