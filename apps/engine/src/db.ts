@@ -1,6 +1,6 @@
 import { DatabaseSync } from 'node:sqlite';
 import { randomUUID } from 'node:crypto';
-import type { Agent, Project, Run, RunEvent, RunEventKind, Ticket } from './types.js';
+import type { Agent, BacklogDraft, BacklogItem, Project, Run, RunEvent, RunEventKind, Ticket } from './types.js';
 import { DEFAULT_WORKFLOW_YAML } from './workflow.js';
 
 const SCHEMA = `
@@ -30,7 +30,22 @@ CREATE TABLE IF NOT EXISTS manual_tickets (
   labels TEXT NOT NULL DEFAULT '[]', seq INTEGER NOT NULL, PRIMARY KEY (project_id, key)
 );
 CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS backlog_drafts (
+  id TEXT PRIMARY KEY, project_id TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'draft', items TEXT NOT NULL,
+  created_keys TEXT NOT NULL DEFAULT '[]', error TEXT, cost_usd REAL NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL, approved_at TEXT
+);
+CREATE INDEX IF NOT EXISTS backlog_drafts_project ON backlog_drafts(project_id);
+CREATE TABLE IF NOT EXISTS ticket_deps (
+  project_id TEXT NOT NULL, ticket_key TEXT NOT NULL, depends_on_key TEXT NOT NULL,
+  PRIMARY KEY (project_id, ticket_key, depends_on_key)
+);
 `;
+
+/** Columns added after the first release, for databases created before them. */
+const COLUMNS: { table: string; column: string; ddl: string }[] = [
+  { table: 'runs', column: 'area', ddl: 'ALTER TABLE runs ADD COLUMN area TEXT' },
+];
 
 type Row = Record<string, any>;
 const now = () => new Date().toISOString();
@@ -42,6 +57,10 @@ export class Store {
     this.db = new DatabaseSync(file);
     this.db.exec('PRAGMA journal_mode = WAL;');
     this.db.exec(SCHEMA);
+    for (const c of COLUMNS) {
+      const cols = this.db.prepare(`PRAGMA table_info(${c.table})`).all() as Row[];
+      if (!cols.some((r) => r.name === c.column)) this.db.exec(c.ddl);
+    }
   }
 
   // Projects
@@ -79,6 +98,8 @@ export class Store {
   deleteProject(id: string): void {
     this.db.prepare('DELETE FROM projects WHERE id = ?').run(id);
     this.db.prepare('DELETE FROM manual_tickets WHERE project_id = ?').run(id);
+    this.db.prepare('DELETE FROM backlog_drafts WHERE project_id = ?').run(id);
+    this.db.prepare('DELETE FROM ticket_deps WHERE project_id = ?').run(id);
   }
 
   // Agents
@@ -108,14 +129,17 @@ export class Store {
   }
 
   // Runs
-  createRun(input: Pick<Run, 'projectId' | 'agentId' | 'ticketKey' | 'ticketTitle' | 'branch' | 'worktree'>): Run {
-    const r: Run = { ...input, id: randomUUID(), status: 'running', attempts: 0, costUsd: 0, prUrl: null, error: null, startedAt: now(), endedAt: null };
+  createRun(input: Pick<Run, 'projectId' | 'agentId' | 'ticketKey' | 'ticketTitle' | 'branch' | 'worktree'> & { area?: string | null }): Run {
+    const r: Run = {
+      ...input, area: input.area ?? null, id: randomUUID(), status: 'running', attempts: 0, costUsd: 0, prUrl: null, error: null,
+      startedAt: now(), endedAt: null,
+    };
     this.db
       .prepare(
-        `INSERT INTO runs (id, project_id, agent_id, ticket_key, ticket_title, branch, worktree, status, attempts, cost_usd, started_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?)`,
+        `INSERT INTO runs (id, project_id, agent_id, ticket_key, ticket_title, branch, worktree, status, attempts, cost_usd, area, started_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?)`,
       )
-      .run(r.id, r.projectId, r.agentId, r.ticketKey, r.ticketTitle, r.branch, r.worktree, r.status, r.startedAt);
+      .run(r.id, r.projectId, r.agentId, r.ticketKey, r.ticketTitle, r.branch, r.worktree, r.status, r.area, r.startedAt);
     return r;
   }
   getRun(id: string): Run | undefined {
@@ -171,6 +195,45 @@ export class Store {
     this.db.prepare('UPDATE manual_tickets SET status = ? WHERE project_id = ? AND key = ?').run(status, projectId, key);
   }
 
+  // Backlog drafts from the planner
+  createDraft(projectId: string, items: BacklogItem[], costUsd: number): BacklogDraft {
+    const d: BacklogDraft = {
+      id: randomUUID(), projectId, status: 'draft', items, createdKeys: [], error: null, costUsd, createdAt: now(), approvedAt: null,
+    };
+    this.db
+      .prepare('INSERT INTO backlog_drafts (id, project_id, status, items, created_keys, cost_usd, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
+      .run(d.id, projectId, d.status, JSON.stringify(items), '[]', costUsd, d.createdAt);
+    return d;
+  }
+  getDraft(id: string): BacklogDraft | undefined {
+    const row = this.db.prepare('SELECT * FROM backlog_drafts WHERE id = ?').get(id) as Row | undefined;
+    return row ? toDraft(row) : undefined;
+  }
+  listDrafts(projectId: string): BacklogDraft[] {
+    return (this.db.prepare('SELECT * FROM backlog_drafts WHERE project_id = ? ORDER BY created_at DESC, rowid DESC').all(projectId) as Row[]).map(toDraft);
+  }
+  updateDraft(id: string, patch: Partial<Pick<BacklogDraft, 'status' | 'items' | 'createdKeys' | 'error' | 'approvedAt'>>): BacklogDraft | undefined {
+    const current = this.getDraft(id);
+    if (!current) return undefined;
+    const d = { ...current, ...patch };
+    this.db.prepare('UPDATE backlog_drafts SET status = ?, items = ?, created_keys = ?, error = ?, approved_at = ? WHERE id = ?')
+      .run(d.status, JSON.stringify(d.items), JSON.stringify(d.createdKeys), d.error, d.approvedAt, id);
+    return d;
+  }
+
+  // Ticket dependencies (kept here because not every PM tool has links)
+  addDependency(projectId: string, ticketKey: string, dependsOnKey: string): void {
+    this.db.prepare('INSERT OR IGNORE INTO ticket_deps (project_id, ticket_key, depends_on_key) VALUES (?, ?, ?)').run(projectId, ticketKey, dependsOnKey);
+  }
+  /** ticket key -> keys it depends on */
+  dependencies(projectId: string): Map<string, string[]> {
+    const map = new Map<string, string[]>();
+    for (const r of this.db.prepare('SELECT ticket_key, depends_on_key FROM ticket_deps WHERE project_id = ? ORDER BY rowid').all(projectId) as Row[]) {
+      map.set(r.ticket_key, [...(map.get(r.ticket_key) ?? []), r.depends_on_key]);
+    }
+    return map;
+  }
+
   // Settings
   getSetting(key: string): string | undefined {
     const row = this.db.prepare('SELECT value FROM settings WHERE key = ?').get(key) as Row | undefined;
@@ -199,7 +262,13 @@ function toRun(r: Row): Run {
   return {
     id: r.id, projectId: r.project_id, agentId: r.agent_id, ticketKey: r.ticket_key, ticketTitle: r.ticket_title,
     branch: r.branch, worktree: r.worktree, status: r.status, attempts: r.attempts, costUsd: r.cost_usd,
-    prUrl: r.pr_url ?? null, error: r.error ?? null, startedAt: r.started_at, endedAt: r.ended_at ?? null,
+    prUrl: r.pr_url ?? null, error: r.error ?? null, area: r.area ?? null, startedAt: r.started_at, endedAt: r.ended_at ?? null,
+  };
+}
+function toDraft(r: Row): BacklogDraft {
+  return {
+    id: r.id, projectId: r.project_id, status: r.status, items: JSON.parse(r.items), createdKeys: JSON.parse(r.created_keys),
+    error: r.error ?? null, costUsd: r.cost_usd, createdAt: r.created_at, approvedAt: r.approved_at ?? null,
   };
 }
 function toTicket(r: Row): Ticket {

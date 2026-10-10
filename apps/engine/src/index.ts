@@ -24,3 +24,7 @@ const dashboardDir = join(here, '../../dashboard/dist/dashboard/browser');
 const app = await buildServer({ store, secrets, agent, orchestrator, reposDir: paths.repos, dashboardDir });
 await app.listen({ port: PORT, host: HOST });
 console.log(`Maestro engine on http://${HOST}:${PORT}`);
+
+// Auto-assign: pick up ready tickets for projects that have it on.
+setInterval(() => void orchestrator.tick(), 15_000);
+void orchestrator.tick();

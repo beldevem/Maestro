@@ -84,6 +84,8 @@ export interface Run {
   costUsd: number;
   prUrl: string | null;
   error: string | null;
+  /** The ticket's `area:` label, so one_per_area works without asking the PM tool. */
+  area: string | null;
   startedAt: string;
   endedAt: string | null;
 }
@@ -96,4 +98,31 @@ export interface RunEvent {
   ts: string;
   kind: RunEventKind;
   message: string;
+}
+
+export type TicketSize = 'XS' | 'S' | 'M' | 'L' | 'XL';
+
+/** One ticket the planner proposes. dependsOn holds indexes of earlier items in the same draft. */
+export interface BacklogItem {
+  title: string;
+  description: string;
+  acceptanceCriteria: string;
+  size: TicketSize;
+  labels: string[];
+  dependsOn: number[];
+}
+
+export type DraftStatus = 'draft' | 'approved' | 'discarded';
+
+export interface BacklogDraft {
+  id: string;
+  projectId: string;
+  status: DraftStatus;
+  items: BacklogItem[];
+  /** Ticket keys already created for each item (by index) when approval stopped partway. */
+  createdKeys: (string | null)[];
+  error: string | null;
+  costUsd: number;
+  createdAt: string;
+  approvedAt: string | null;
 }

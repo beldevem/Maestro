@@ -10,7 +10,7 @@ import { runGates } from './gates.js';
 import { git } from './proc.js';
 import type { SecretStore } from './secrets.js';
 import type { Agent, AgentState, Project, Run, RunEventKind, Ticket } from './types.js';
-import { branchName, checkReady, commitMessage, parseWorkflow, type Workflow } from './workflow.js';
+import { blockedBy, branchName, checkReady, commitMessage, parseWorkflow, ticketArea, type Workflow } from './workflow.js';
 
 export interface OrchestratorDeps {
   store: Store;
@@ -30,6 +30,8 @@ const BASE_TOOLS = ['Read', 'Write', 'Edit', 'MultiEdit', 'Glob', 'Grep', 'TodoW
 
 export class Orchestrator {
   private readonly active = new Map<string, AbortController>();
+  private ticking: Promise<Run[]> | null = null;
+  private tickAgain = false;
 
   constructor(private readonly d: OrchestratorDeps) {}
 
@@ -74,7 +76,9 @@ export class Orchestrator {
 
     const dir = join(this.d.worktreesDir, project.id);
     mkdirSync(dir, { recursive: true });
-    const run = store.createRun({ projectId, agentId: agent.id, ticketKey: ticket.key, ticketTitle: ticket.title, branch, worktree: '' });
+    const run = store.createRun({
+      projectId, agentId: agent.id, ticketKey: ticket.key, ticketTitle: ticket.title, branch, worktree: '', area: ticketArea(ticket),
+    });
     const worktree = join(dir, run.id);
     await git(repoPath, ['worktree', 'add', '-b', branch, worktree, baseRef]);
     store.db.prepare('UPDATE runs SET worktree = ? WHERE id = ?').run(worktree, run.id);
@@ -86,10 +90,87 @@ export class Orchestrator {
     this.setAgent(agent.id, 'working', run.id, `On ${ticket.key}`);
     this.log(run.id, 'info', `${agent.name} picked up ${ticket.key} on branch ${branch} from ${baseRef}.`);
 
-    void this.work({ project, wf, ticket, agent, run, repoPath, codeHost, pm, signal: controller.signal }).finally(() =>
-      this.active.delete(run.id),
-    );
+    void this.work({ project, wf, ticket, agent, run, repoPath, codeHost, pm, signal: controller.signal }).finally(() => {
+      this.active.delete(run.id);
+      void this.tick();
+    });
     return run;
+  }
+
+  /** The board toggle (setting autoAssign.<projectId>) wins over the workflow's orchestration.auto_assign. */
+  autoAssignEnabled(project: Project, wf: Workflow = parseWorkflow(project.workflowYaml)): boolean {
+    const toggle = this.d.store.getSetting(`autoAssign.${project.id}`);
+    return toggle === undefined ? wf.orchestration.auto_assign : toggle === 'true';
+  }
+
+  /**
+   * Assigns ready, unblocked to-do tickets to free workers for every project with auto-assign on.
+   * Never throws; overlapping calls run once more after the current pass instead of in parallel.
+   */
+  tick(): Promise<Run[]> {
+    if (this.ticking) {
+      this.tickAgain = true;
+      return this.ticking;
+    }
+    this.ticking = (async () => {
+      const started: Run[] = [];
+      do {
+        this.tickAgain = false;
+        let projects: Project[] = [];
+        try {
+          projects = this.d.store.listProjects();
+        } catch (e) {
+          console.error(`Auto-assign could not list projects: ${e instanceof Error ? e.message : String(e)}`);
+        }
+        for (const project of projects) {
+          try {
+            started.push(...(await this.assignReady(project)));
+          } catch (e) {
+            console.error(`Auto-assign for "${project.name}" failed: ${e instanceof Error ? e.message : String(e)}`);
+          }
+        }
+      } while (this.tickAgain);
+      return started;
+    })().finally(() => (this.ticking = null));
+    return this.ticking;
+  }
+
+  private async assignReady(project: Project): Promise<Run[]> {
+    const { store } = this.d;
+    const wf = parseWorkflow(project.workflowYaml);
+    if (!this.autoAssignEnabled(project, wf)) return [];
+    const { max_parallel, one_per_area, dependency_ready_when } = wf.orchestration;
+
+    const running = store.listRuns(project.id).filter((r) => r.status === 'running');
+    let slots = Math.min(max_parallel - running.length, this.maxConcurrent() - this.active.size, this.freeWorkers());
+    if (slots <= 0) return [];
+
+    const tickets = await pmFor(project, store, this.d.secrets).listTickets();
+    const blocked = blockedBy(tickets, store.dependencies(project.id), dependency_ready_when);
+    const busyKeys = new Set(running.map((r) => r.ticketKey));
+    const busyAreas = new Set(running.map((r) => r.area).filter(Boolean));
+    const started: Run[] = [];
+
+    for (const ticket of tickets) {
+      if (slots <= 0) break;
+      if (ticket.status !== 'todo' || busyKeys.has(ticket.key)) continue;
+      if (checkReady(wf, ticket).length || blocked.get(ticket.key)?.length) continue;
+      const area = ticketArea(ticket);
+      if (one_per_area && area && busyAreas.has(area)) continue;
+      try {
+        started.push(await this.start(project.id, ticket.key));
+        slots -= 1;
+        if (area) busyAreas.add(area);
+      } catch (e) {
+        console.error(`Auto-assign could not start ${ticket.key}: ${e instanceof Error ? e.message : String(e)}`);
+        if (this.freeWorkers() === 0 || this.active.size >= this.maxConcurrent()) break;
+      }
+    }
+    return started;
+  }
+
+  private freeWorkers(): number {
+    return this.d.store.listAgents().filter((a) => a.role === 'worker' && a.state === 'available').length;
   }
 
   stop(runId: string): boolean {

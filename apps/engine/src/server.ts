@@ -2,18 +2,20 @@ import Fastify, { type FastifyInstance } from 'fastify';
 import cors from '@fastify/cors';
 import fastifyStatic from '@fastify/static';
 import { existsSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { z } from 'zod';
 import { codeHostFor } from './adapters/codehost/index.js';
 import { pmFor } from './adapters/pm/index.js';
 import { askAssistant } from './agents/assistant.js';
+import { approveDraft, backlogItemSchema, cleanItems, draftBacklog } from './agents/planner.js';
 import type { CodingAgent } from './agents/coding-agent.js';
 import type { Store } from './db.js';
 import { bus, type BusEvent } from './events.js';
 import { NotReadyError, Orchestrator } from './orchestrator.js';
 import { git } from './proc.js';
 import { KNOWN_SECRETS, type SecretStore } from './secrets.js';
-import { checkReady, parseWorkflow, validateWorkflow } from './workflow.js';
+import { blockedBy, checkReady, parseWorkflow, validateWorkflow } from './workflow.js';
 
 export interface ServerDeps {
   store: Store;
@@ -72,6 +74,13 @@ export async function buildServer(d: ServerDeps): Promise<FastifyInstance> {
     if (!p) throw Object.assign(new Error('Project not found.'), { statusCode: 404 });
     return p;
   };
+  const draft = (id: string) => {
+    const dr = d.store.getDraft(id);
+    if (!dr) throw Object.assign(new Error('Draft not found.'), { statusCode: 404 });
+    return dr;
+  };
+  const repoDir = (p: ReturnType<typeof project>) => (p.codeHost.provider === 'local' ? p.codeHost.localPath ?? '' : join(d.reposDir, p.id));
+  const planning = new Set<string>();
 
   app.get('/api/health', async () => ({ ok: true }));
 
@@ -105,7 +114,9 @@ export async function buildServer(d: ServerDeps): Promise<FastifyInstance> {
     const p = project(req.params.id);
     const wf = parseWorkflow(p.workflowYaml);
     const tickets = await pmFor(p, d.store, d.secrets).listTickets();
-    return tickets.map((t) => ({ ...t, notReady: checkReady(wf, t) }));
+    const deps = d.store.dependencies(p.id);
+    const blocked = blockedBy(tickets, deps, wf.orchestration.dependency_ready_when);
+    return tickets.map((t) => ({ ...t, notReady: checkReady(wf, t), dependsOn: deps.get(t.key) ?? [], blockedBy: blocked.get(t.key) ?? [] }));
   });
   app.post<{ Params: { id: string } }>('/api/projects/:id/tickets', async (req) => {
     const p = project(req.params.id);
@@ -115,6 +126,62 @@ export async function buildServer(d: ServerDeps): Promise<FastifyInstance> {
     '/api/projects/:id/tickets/:key/start',
     async (req) => d.orchestrator.start(req.params.id, req.params.key, req.body ?? {}),
   );
+  // Projects without a PM tool have nowhere else to move tickets, e.g. to done after review.
+  app.post<{ Params: { id: string; key: string } }>('/api/projects/:id/tickets/:key/status', async (req) => {
+    const p = project(req.params.id);
+    if (p.pm.provider !== 'manual') throw new Error(`Change the ticket's status in ${p.pm.provider === 'jira' ? 'Jira' : 'Trello'}.`);
+    const { status } = z.object({ status: z.enum(['todo', 'in_progress', 'in_review', 'done']) }).parse(req.body);
+    if (!d.store.getManualTicket(p.id, req.params.key)) throw Object.assign(new Error('Ticket not found.'), { statusCode: 404 });
+    d.store.setManualTicketStatus(p.id, req.params.key, status);
+    void d.orchestrator.tick();
+    return d.store.getManualTicket(p.id, req.params.key);
+  });
+
+  // Auto-assign toggle for the board
+  app.get<{ Params: { id: string } }>('/api/projects/:id/auto-assign', async (req) => ({
+    enabled: d.orchestrator.autoAssignEnabled(project(req.params.id)),
+  }));
+  app.put<{ Params: { id: string } }>('/api/projects/:id/auto-assign', async (req) => {
+    const p = project(req.params.id);
+    const { enabled } = z.object({ enabled: z.boolean() }).parse(req.body);
+    d.store.setSetting(`autoAssign.${p.id}`, String(enabled));
+    if (enabled) void d.orchestrator.tick();
+    return { enabled };
+  });
+
+  // Planner: drafts a backlog you review before any ticket is created
+  app.post<{ Params: { id: string } }>('/api/projects/:id/plan', async (req) => {
+    const p = project(req.params.id);
+    if (planning.has(p.id)) throw Object.assign(new Error('The planner is already working on this project.'), { statusCode: 409 });
+    planning.add(p.id);
+    try {
+      const tickets = await pmFor(p, d.store, d.secrets).listTickets();
+      const cwd = existsSync(repoDir(p)) ? repoDir(p) : tmpdir();
+      return await draftBacklog(d, p, tickets, cwd);
+    } finally {
+      planning.delete(p.id);
+    }
+  });
+  app.get<{ Params: { id: string } }>('/api/projects/:id/drafts', async (req) => d.store.listDrafts(project(req.params.id).id));
+  app.patch<{ Params: { id: string } }>('/api/drafts/:id', async (req) => {
+    const dr = draft(req.params.id);
+    if (dr.status !== 'draft') throw Object.assign(new Error(`This draft is already ${dr.status}.`), { statusCode: 409 });
+    if (dr.createdKeys.some(Boolean)) throw Object.assign(new Error('Some tickets were already created from this draft; approve it again to finish.'), { statusCode: 409 });
+    const { items } = z.object({ items: z.array(backlogItemSchema) }).parse(req.body);
+    return d.store.updateDraft(dr.id, { items: cleanItems(items) });
+  });
+  app.post<{ Params: { id: string } }>('/api/drafts/:id/approve', async (req) => {
+    const dr = draft(req.params.id);
+    if (dr.status !== 'draft') throw Object.assign(new Error(`This draft is already ${dr.status}.`), { statusCode: 409 });
+    const result = await approveDraft(d.store, pmFor(project(dr.projectId), d.store, d.secrets), dr);
+    if (!result.error) void d.orchestrator.tick();
+    return result;
+  });
+  app.post<{ Params: { id: string } }>('/api/drafts/:id/discard', async (req) => {
+    const dr = draft(req.params.id);
+    if (dr.status !== 'draft') throw Object.assign(new Error(`This draft is already ${dr.status}.`), { statusCode: 409 });
+    return d.store.updateDraft(dr.id, { status: 'discarded' });
+  });
 
   // Runs
   app.get<{ Querystring: { projectId?: string } }>('/api/runs', async (req) => d.store.listRuns(req.query.projectId));
@@ -180,8 +247,7 @@ export async function buildServer(d: ServerDeps): Promise<FastifyInstance> {
       .object({ message: z.string().min(1), history: z.array(z.object({ role: z.enum(['user', 'assistant']), content: z.string() })).default([]) })
       .parse(req.body);
     const tickets = await pmFor(p, d.store, d.secrets).listTickets().catch(() => []);
-    const cwd = p.codeHost.provider === 'local' ? p.codeHost.localPath ?? '' : join(d.reposDir, p.id);
-    return askAssistant(d, p, tickets, cwd, body.history, body.message);
+    return askAssistant(d, p, tickets, repoDir(p), body.history, body.message);
   });
 
   // Settings
@@ -191,6 +257,7 @@ export async function buildServer(d: ServerDeps): Promise<FastifyInstance> {
       settings: {
         'model.worker': 'claude-sonnet-5-5',
         'model.assistant': 'claude-sonnet-5-5',
+        'model.planner': 'claude-opus-5-5',
         maxConcurrentRuns: '3',
         'budget.perRunUsd': '5',
         ...d.store.allSettings(),

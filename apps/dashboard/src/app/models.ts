@@ -26,6 +26,31 @@ export interface Ticket {
   labels: string[];
   url?: string;
   notReady: string[];
+  dependsOn: string[];
+  /** Dependencies that are not finished yet. */
+  blockedBy: string[];
+}
+
+export interface BacklogItem {
+  title: string;
+  description: string;
+  acceptanceCriteria: string;
+  size: string;
+  labels: string[];
+  /** Indexes of earlier items in the same draft. */
+  dependsOn: number[];
+}
+
+export interface BacklogDraft {
+  id: string;
+  projectId: string;
+  status: 'draft' | 'approved' | 'discarded';
+  items: BacklogItem[];
+  createdKeys: (string | null)[];
+  error: string | null;
+  costUsd: number;
+  createdAt: string;
+  approvedAt: string | null;
 }
 
 export interface Agent {
@@ -51,6 +76,7 @@ export interface Run {
   costUsd: number;
   prUrl: string | null;
   error: string | null;
+  area: string | null;
   startedAt: string;
   endedAt: string | null;
 }

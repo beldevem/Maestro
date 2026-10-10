@@ -36,6 +36,12 @@ definition_of_done:
 
 pull_request:
   draft: true
+
+orchestration:
+  auto_assign: false               # assign ready tickets to free workers on their own (the board toggle overrides this)
+  dependency_ready_when: done      # or in_review: start a ticket once what it depends on is in review
+  max_parallel: 2                  # tickets of this project worked on at once
+  one_per_area: true               # never two running tickets with the same area: label
 `;
 
 const gateSchema = z.object({ name: z.string(), run: z.string() });
@@ -57,6 +63,14 @@ export const workflowSchema = z.object({
   allowed_commands: z.array(z.string()).default([]),
   definition_of_done: z.array(z.string()).default([]),
   pull_request: z.object({ draft: z.boolean().default(true) }).default({ draft: true }),
+  orchestration: z
+    .object({
+      auto_assign: z.boolean().default(false),
+      dependency_ready_when: z.enum(['done', 'in_review']).default('done'),
+      max_parallel: z.number().int().min(1).default(2),
+      one_per_area: z.boolean().default(true),
+    })
+    .default({ auto_assign: false, dependency_ready_when: 'done', max_parallel: 2, one_per_area: true }),
 });
 
 export type Workflow = z.infer<typeof workflowSchema>;
@@ -122,4 +136,28 @@ export function checkReady(wf: Workflow, ticket: Ticket): string[] {
   }
   if (ticket.status === 'done') reasons.push('Ticket is already done.');
   return reasons;
+}
+
+/** The part of the code a ticket touches, from its `area:<name>` label. */
+export function ticketArea(ticket: Pick<Ticket, 'labels'>): string | null {
+  const label = ticket.labels.find((l) => /^area:./i.test(l.trim()));
+  return label ? label.trim().slice(5).trim().toLowerCase() : null;
+}
+
+/**
+ * Dependencies of each ticket that are not satisfied yet. A dependency whose ticket is no longer
+ * listed by the PM tool (deleted, or past its listing limit) does not block.
+ */
+export function blockedBy(
+  tickets: Pick<Ticket, 'key' | 'status'>[],
+  deps: Map<string, string[]>,
+  readyWhen: Workflow['orchestration']['dependency_ready_when'],
+): Map<string, string[]> {
+  const status = new Map(tickets.map((t) => [t.key, t.status]));
+  const ok = (s: Ticket['status']) => s === 'done' || (readyWhen === 'in_review' && s === 'in_review');
+  const result = new Map<string, string[]>();
+  for (const t of tickets) {
+    result.set(t.key, (deps.get(t.key) ?? []).filter((k) => status.has(k) && !ok(status.get(k)!)));
+  }
+  return result;
 }

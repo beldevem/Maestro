@@ -4,14 +4,15 @@ import { FormsModule } from '@angular/forms';
 import { Router, RouterLink } from '@angular/router';
 import { Api, ApiError } from '../api';
 import { Live } from '../live';
-import { RUN_LABEL, STATUS_LABEL, type Project, type Ticket, type TicketStatus } from '../models';
+import { RUN_LABEL, STATUS_LABEL, type BacklogDraft, type Project, type Ticket, type TicketStatus } from '../models';
+import { BacklogDraftPanel } from './backlog-draft';
 import { ConnectorFields } from './connector-fields';
 
 type Tab = 'board' | 'knowledge' | 'workflow' | 'runs' | 'chat' | 'connectors';
 
 @Component({
   selector: 'app-project',
-  imports: [FormsModule, RouterLink, DatePipe, DecimalPipe, ConnectorFields],
+  imports: [FormsModule, RouterLink, DatePipe, DecimalPipe, ConnectorFields, BacklogDraftPanel],
   template: `
     @if (project(); as p) {
       <header class="page-head">
@@ -33,7 +34,18 @@ type Tab = 'board' | 'knowledge' | 'workflow' | 'runs' | 'chat' | 'connectors';
           <div class="toolbar">
             <button (click)="loadTickets()">Refresh</button>
             <button class="primary" (click)="showNewTicket.set(!showNewTicket())">{{ showNewTicket() ? 'Cancel' : 'New ticket' }}</button>
+            <button (click)="plan()" [disabled]="planning() || !!draft()" [title]="draft() ? 'Create or discard the current draft first' : ''">Plan backlog</button>
+            <label class="toggle" title="Assign ready tickets to free workers automatically">
+              <input type="checkbox" [checked]="autoAssign()" (change)="toggleAutoAssign($any($event.target).checked)" /> Auto-assign
+            </label>
           </div>
+          @if (planning()) {
+            <p class="notice"><span class="spinner"></span> The planner is reading the requirements and the code. This can take a minute or more.</p>
+          }
+          @if (planError()) { <p class="error">{{ planError() }}</p> }
+          @if (draft(); as dr) {
+            <app-backlog-draft [draft]="dr" [pmName]="pmName()" (done)="draftDone($event)" />
+          }
           @if (showNewTicket()) {
             <form class="panel" (ngSubmit)="createTicket()">
               <label>Title <input [(ngModel)]="newTicket.title" name="title" required /></label>
@@ -66,10 +78,19 @@ type Tab = 'board' | 'knowledge' | 'workflow' | 'runs' | 'chat' | 'connectors';
                     @if (activeRun(t.key); as r) {
                       <a class="state state-working" [routerLink]="['/runs', r.id]">Agent working</a>
                     } @else if (t.status === 'todo' || t.status === 'in_progress') {
+                      @if (t.blockedBy.length) {
+                        <p class="warn">Waits on {{ t.blockedBy.join(', ') }}</p>
+                      }
                       @if (t.notReady.length) {
                         <p class="warn" [title]="t.notReady.join(' ')">Not ready: {{ t.notReady[0] }}</p>
                       }
-                      <button (click)="start(t)">{{ t.notReady.length ? 'Start anyway' : 'Assign to agent' }}</button>
+                      @if (t.blockedBy.length) {
+                        <button class="quiet" (click)="start(t)">Start anyway</button>
+                      } @else {
+                        <button (click)="start(t)">{{ t.notReady.length ? 'Start anyway' : 'Assign to agent' }}</button>
+                      }
+                    } @else if (t.status === 'in_review' && p.pm.provider === 'manual') {
+                      <button (click)="markDone(t)">Mark done</button>
                     }
                   </article>
                 }
@@ -180,6 +201,10 @@ export class ProjectPage {
   readonly checks = signal<{ name: string; ok: boolean; message: string }[]>([]);
   readonly messages = signal<{ role: 'user' | 'assistant'; content: string }[]>([]);
   readonly thinking = signal(false);
+  readonly autoAssign = signal(false);
+  readonly planning = signal(false);
+  readonly planError = signal('');
+  readonly draft = signal<BacklogDraft | null>(null);
   newTicket = { title: '', description: '', acceptanceCriteria: '', size: '', labels: '' };
   question = '';
 
@@ -196,7 +221,56 @@ export class ProjectPage {
       const id = this.id();
       void this.api.project(id).then((p) => this.project.set(p));
       void this.loadTickets();
+      void this.loadDraft();
+      void this.api.autoAssign(id).then((a) => this.autoAssign.set(a.enabled));
     });
+    // Auto-assign moves tickets on its own; keep the board in step with runs starting and finishing.
+    let seen = '';
+    effect(() => {
+      const sig = this.projectRuns().map((r) => `${r.id}:${r.status}`).join(',');
+      if (seen && sig !== seen) void this.loadTickets();
+      seen = sig;
+    });
+  }
+
+  async loadDraft(): Promise<void> {
+    const drafts = await this.api.drafts(this.id()).catch(() => []);
+    this.draft.set(drafts.find((d) => d.status === 'draft') ?? null);
+  }
+
+  async plan(): Promise<void> {
+    this.planning.set(true);
+    this.planError.set('');
+    try {
+      this.draft.set(await this.api.plan(this.id()));
+    } catch (e) {
+      this.planError.set(`Planning failed: ${(e as Error).message}`);
+    } finally {
+      this.planning.set(false);
+    }
+  }
+
+  async draftDone(error: string | null): Promise<void> {
+    await Promise.all([this.loadDraft(), this.loadTickets()]);
+    if (!error) this.flash('Backlog updated.');
+  }
+
+  async toggleAutoAssign(enabled: boolean): Promise<void> {
+    try {
+      this.autoAssign.set((await this.api.setAutoAssign(this.id(), enabled)).enabled);
+      this.flash(enabled ? 'Auto-assign is on: ready tickets go to free workers.' : 'Auto-assign is off.');
+    } catch (e) {
+      this.flash((e as Error).message);
+    }
+  }
+
+  async markDone(t: Ticket): Promise<void> {
+    try {
+      await this.api.setTicketStatus(this.id(), t.key, 'done');
+      await this.loadTickets();
+    } catch (e) {
+      this.ticketError.set((e as Error).message);
+    }
   }
 
   activeRun(key: string) {
@@ -231,7 +305,8 @@ export class ProjectPage {
   }
 
   async start(t: Ticket): Promise<void> {
-    if (t.notReady.length && !confirm(`${t.key} is not ready:\n${t.notReady.join('\n')}\n\nStart anyway?`)) return;
+    const problems = [...(t.blockedBy.length ? [`It waits on ${t.blockedBy.join(', ')}.`] : []), ...t.notReady];
+    if (problems.length && !confirm(`${t.key} is not ready:\n${problems.join('\n')}\n\nStart anyway?`)) return;
     try {
       const run = await this.api.startTicket(this.id(), t.key, t.notReady.length > 0);
       await this.router.navigate(['/runs', run.id]);

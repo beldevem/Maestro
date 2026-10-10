@@ -2,7 +2,7 @@
 
 A dashboard on your machine where you link projects to a code host and a PM tool, hand tickets to coding agents, and review the branches and pull requests they produce.
 
-This is the MVP: Phases 0 and 1 of the plan, plus the board, agent states, chat and connector settings.
+This covers Phases 0 to 2 of the plan: the board, worker agents, agent states, chat and connector settings, plus the planner and auto-assign.
 
 ## What works now
 
@@ -18,13 +18,16 @@ This is the MVP: Phases 0 and 1 of the plan, plus the board, agent states, chat 
   6. moves the ticket to "In review" and comments with the link.
 - **Agents screen** shows each agent's live state: available, working on ticket, running checks, blocked, paused. You can pause, unblock or stop an agent.
 - **Run view** shows a live activity log (agent messages, tool calls, gate results) and the diff.
+- **Planner** (Phase 2): "Plan backlog" on the board reads the requirements and the code (read-only) and drafts small tickets, each with acceptance criteria, a size, an `area:` label and dependencies. You edit the draft, then create the tickets in the PM tool in order. Dependencies are kept in Maestro and written into each ticket as "Depends on: KEY".
+- **Auto-assign** (Phase 2): with the board toggle on (or `orchestration.auto_assign` in the workflow config), Maestro hands ready to-do tickets to free workers every 15 seconds and whenever a run ends. It skips tickets whose dependencies are not finished (`dependency_ready_when: done` or `in_review`), runs at most `max_parallel` tickets per project, and with `one_per_area` never runs two tickets with the same `area:` label at once. Blocked cards show "Waits on KEY".
 - **Chat** per project answers questions using the project knowledge, its tickets, its runs and a read-only look at the code.
-- **Settings** hold API keys and tokens, the default models, how many tickets run at once, and a budget per run.
+- **Mark done** on In review cards for projects without a PM tool.
+- **Settings** hold API keys and tokens, the default models (worker, chat, planner), how many tickets run at once, and a budget per run.
 
 ## Not in the MVP yet
 
 - Reviewer agent and the fix loop driven by PR comments (Phase 3).
-- Planner that turns requirements into a backlog, and automatic assignment of every ready ticket (Phase 2).
+- Dependency links in Jira and Trello themselves: Maestro keeps dependencies in its own database and writes them into the ticket text.
 - GitLab and Bitbucket adapters (the code host interface is ready for them).
 - Design context from Figma for agents (the link is saved on the project).
 - Secrets in the OS keychain. For now they are in `~/.maestro/secrets.json`, readable only by you.

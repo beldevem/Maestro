@@ -16,6 +16,8 @@ export interface AgentTask {
   maxTurns?: number;
   maxBudgetUsd?: number;
   env?: Record<string, string>;
+  /** JSON schema the final answer must follow; the result comes back in `structured`. */
+  outputSchema?: Record<string, unknown>;
   signal?: AbortSignal;
   onMessage?: (m: AgentMessage) => void;
 }
@@ -26,6 +28,8 @@ export interface AgentOutcome {
   costUsd: number;
   ok: boolean;
   error?: string;
+  /** Present when the task had an outputSchema and the agent returned matching output. */
+  structured?: unknown;
 }
 
 /** The engine talks to coding agents through this, so the provider can be swapped and tests can fake it. */
@@ -56,6 +60,7 @@ export class ClaudeCodingAgent implements CodingAgent {
       resume: task.resume,
       abortController,
       env: { ...process.env, ...task.env } as Record<string, string>,
+      outputFormat: task.outputSchema ? { type: 'json_schema', schema: task.outputSchema } : undefined,
     };
 
     let sessionId: string | null = task.resume ?? null;
@@ -63,6 +68,7 @@ export class ClaudeCodingAgent implements CodingAgent {
     let costUsd = 0;
     let ok = false;
     let error: string | undefined;
+    let structured: unknown;
 
     try {
       for await (const msg of query({ prompt: task.prompt, options })) {
@@ -77,6 +83,7 @@ export class ClaudeCodingAgent implements CodingAgent {
           if (msg.subtype === 'success' && !msg.is_error) {
             ok = true;
             text = msg.result;
+            structured = msg.structured_output;
           } else {
             error = msg.subtype === 'success' ? msg.result : `Agent stopped: ${msg.subtype}`;
           }
@@ -85,6 +92,6 @@ export class ClaudeCodingAgent implements CodingAgent {
     } catch (e) {
       error = e instanceof Error ? e.message : String(e);
     }
-    return { sessionId, text, costUsd, ok, error };
+    return { sessionId, text, costUsd, ok, error, structured };
   }
 }
