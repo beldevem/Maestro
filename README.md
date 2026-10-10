@@ -65,24 +65,32 @@ npm run dev:engine
 npm run dev:dashboard
 ```
 
-Maestro keeps its database, clones and worktrees in `~/.maestro`. To use another folder, set `MAESTRO_HOME`. `MAESTRO_PORT` changes the port.
+Maestro keeps its database, clones and worktrees in `~/.maestro`. To use another folder, set `MAESTRO_HOME`. `MAESTRO_PORT` changes the port, `MAESTRO_ALLOWED_HOSTS` adds host names the engine answers to, and `MAESTRO_SECRETS=file|keychain` picks where secrets live.
 
 ## First steps
 
-1. Open **Settings** and add your Anthropic API key (skip this if you use Claude Code's login), plus the tokens for GitHub, Jira or Trello.
-2. In **Projects**, create a project. Pick a code host (GitHub repo `owner/name`, or a local folder that is a git repo), then where its tickets live.
-3. Fill in **Knowledge** and adjust the **Workflow** gates to match the repo's lint, test and build commands.
-4. On the **Board**, create a ticket with acceptance criteria and a size, then **Assign to agent**.
-5. Watch it on the run page or on **Agents**. Review the draft PR (or the diff for local projects) and merge it yourself.
+1. Open **Settings** and add your Anthropic API key (skip this if you use Claude Code's login), plus the tokens for your code host and PM tool. Set budgets, and turn on desktop notifications if you want them.
+2. In **Projects**, create a project, from a template if one fits. Pick a code host (GitHub, GitLab, Bitbucket, or a local folder that is a git repo), where its tickets live, and optionally Figma and Confluence.
+3. Fill in **Knowledge** (context, requirements, best practices) and check the **Workflow** gates match the repo's lint, test and build commands.
+4. On the **Board**, press **Plan backlog** and edit the draft, or create tickets yourself. Then assign them, or turn on **Auto-assign**.
+5. Follow runs on the run page, **Agents**, **Pull requests** and **Alerts**. The reviewer agent reviews each change first; then review it yourself (request changes or approve) or on the PR, and merge.
 
 ## Layout
 
 ```
 apps/engine      Node + TypeScript engine (Fastify, SQLite via node:sqlite, Claude Agent SDK)
-  src/adapters/codehost   GitHub, local folder
+  src/adapters/codehost   GitHub, GitLab, Bitbucket, local folder
   src/adapters/pm         Jira, Trello, manual
-  src/agents              coding agent wrapper, prompts, chat assistant
-  src/orchestrator.ts     assign ticket -> worktree -> agent -> gates -> commit -> PR
+  src/adapters/design     Figma
+  src/adapters/docs       Confluence
+  src/agents              coding agent wrapper, prompts, planner, reviewer, chat assistant
+  src/orchestrator.ts     assign -> worktree -> worker -> gates -> commit -> PR -> reviewer -> fixes; auto-assign; PR polling
+  src/budget.ts           daily and per-run budgets
+  src/memory.ts           .maestro/memory.md
+  src/metrics.ts          metrics from runs
+  src/gates.ts            quality gates, optionally in Docker
+  src/secrets.ts          keychain (secret-tool) or file
+  src/templates.ts        project templates
   src/server.ts           REST API and the live event stream
 apps/dashboard   Angular 22 dashboard
 ```
@@ -93,7 +101,7 @@ apps/dashboard   Angular 22 dashboard
 npm test
 ```
 
-The engine tests run a whole worker run on a temporary git repo with a stand-in agent. They cover a failing gate, the fix, the commit on the ticket branch and the ticket moving to review, plus the blocked path and the API.
+The engine tests use stand-in agents and fake APIs, so they need no tokens or network. They run whole worker runs on temporary git repos (gates, fixes, commits, review rounds, your feedback, PR polling, blocked runs and restarts), and cover the planner, auto-assign, budgets and alerts, memory, metrics, every connector against its API's shapes, the keychain, the Docker sandbox, and the API's request guards.
 
 ## Safety
 
