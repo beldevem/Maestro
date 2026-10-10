@@ -1,5 +1,5 @@
 import { Injectable } from '@angular/core';
-import type { Agent, Alert, BacklogDraft, ChatAction, ProjectSpend, BacklogItem, Project, PullRequestRow, Review, ReviewComment, Run, RunEvent, SecretInfo, Ticket, TicketStatus } from './models';
+import type { Agent, Alert, BacklogDraft, ChatAction, Metrics, ProjectSpend, BacklogItem, Project, PullRequestRow, Review, ReviewComment, Run, RunEvent, SecretInfo, Ticket, TicketStatus } from './models';
 
 export class ApiError extends Error {
   constructor(message: string, readonly status: number, readonly reasons: string[] = []) {
@@ -71,6 +71,8 @@ export class Api {
 
   alerts = () => this.call<{ alerts: Alert[]; unread: number }>('GET', '/alerts');
   markAlertsRead = (ids?: number[]) => this.call('POST', '/alerts/read', ids ? { ids } : {});
+  metrics = (projectId?: string, days = 0) =>
+    this.call<Metrics>('GET', `/metrics?${new URLSearchParams({ ...(projectId ? { projectId } : {}), days: String(days) })}`);
   spend = () => this.call<ProjectSpend[]>('GET', '/spend');
   setProjectBudget = (projectId: string, dailyUsd: number | null) => this.call<{ dailyCap: number }>('PUT', `/projects/${projectId}/budget`, { dailyUsd });
 

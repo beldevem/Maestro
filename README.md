@@ -29,6 +29,7 @@ This covers Phases 0 to 3 of the plan: the board, worker agents, agent states, c
 - **Chat** per project answers questions using the project knowledge, its tickets, its runs and a read-only look at the code. Ask it to do something (create a ticket, assign or move one, plan the backlog, pause or resume an agent) and it proposes the action as a card; nothing runs until you click Confirm.
 - **Mark done** on In review cards for projects without a PM tool.
 - **Budgets**: a budget per run (cumulative over the run's agent calls; a run that spends it is blocked, and the reviewer step is skipped) and a daily budget per project (a default in Settings, an override on the project's Runs tab). At the daily budget nothing new starts and auto-assign pauses until tomorrow. Every agent call's cost goes into a spend ledger; the Projects screen shows spend today, over 7 days and in total.
+- **Metrics** per project or across all, for all time or the last 7 or 30 days: runs, success rate, mean time to PR, mean cycle time, first-pass review rate, fix attempts and review rounds per run, cost per ticket, and a per-ticket table.
 - **Alerts** when an agent is blocked, a run fails, a budget is reached or a change is ready for review: in the Alerts screen (with an unread count in the menu) and, if you turn them on in Settings, as desktop notifications from the browser.
 - **Settings** hold API keys and tokens, the default models (worker, chat, planner), how many tickets run at once, and a budget per run.
 

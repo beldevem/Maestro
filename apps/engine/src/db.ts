@@ -65,6 +65,7 @@ const COLUMNS: { table: string; column: string; ddl: string }[] = [
   { table: 'runs', column: 'pr_number', ddl: 'ALTER TABLE runs ADD COLUMN pr_number INTEGER' },
   { table: 'runs', column: 'review_rounds', ddl: 'ALTER TABLE runs ADD COLUMN review_rounds INTEGER NOT NULL DEFAULT 0' },
   { table: 'runs', column: 'checks', ddl: 'ALTER TABLE runs ADD COLUMN checks TEXT' },
+  { table: 'runs', column: 'ready_at', ddl: 'ALTER TABLE runs ADD COLUMN ready_at TEXT' },
 ];
 
 type Row = Record<string, any>;
@@ -156,7 +157,7 @@ export class Store {
   createRun(input: Pick<Run, 'projectId' | 'agentId' | 'ticketKey' | 'ticketTitle' | 'branch' | 'worktree'> & { area?: string | null }): Run {
     const r: Run = {
       ...input, area: input.area ?? null, id: randomUUID(), status: 'running', attempts: 0, costUsd: 0, prUrl: null, error: null,
-      sessionId: null, baseRef: null, prNumber: null, reviewRounds: 0, checks: null, startedAt: now(), endedAt: null,
+      sessionId: null, baseRef: null, prNumber: null, reviewRounds: 0, checks: null, readyAt: null, startedAt: now(), endedAt: null,
     };
     this.db
       .prepare(
@@ -176,6 +177,13 @@ export class Store {
       : this.db.prepare('SELECT * FROM runs ORDER BY started_at DESC LIMIT 200').all();
     return (rows as Row[]).map(toRun);
   }
+  /** Every run, oldest first (listRuns caps the all-projects list for the dashboard). */
+  listAllRuns(projectId?: string): Run[] {
+    const rows = projectId
+      ? this.db.prepare('SELECT * FROM runs WHERE project_id = ? ORDER BY started_at').all(projectId)
+      : this.db.prepare('SELECT * FROM runs ORDER BY started_at').all();
+    return (rows as Row[]).map(toRun);
+  }
   updateRun(id: string, patch: Partial<Omit<Run, 'id'>>): Run | undefined {
     const current = this.getRun(id);
     if (!current) return undefined;
@@ -183,10 +191,10 @@ export class Store {
     this.db
       .prepare(
         `UPDATE runs SET agent_id = ?, status = ?, attempts = ?, cost_usd = ?, pr_url = ?, error = ?, ended_at = ?, worktree = ?, session_id = ?,
-         base_ref = ?, pr_number = ?, review_rounds = ?, checks = ? WHERE id = ?`,
+         base_ref = ?, pr_number = ?, review_rounds = ?, checks = ?, ready_at = ? WHERE id = ?`,
       )
       .run(r.agentId, r.status, r.attempts, r.costUsd, r.prUrl, r.error, r.endedAt, r.worktree, r.sessionId, r.baseRef, r.prNumber,
-        r.reviewRounds, r.checks, id);
+        r.reviewRounds, r.checks, r.readyAt, id);
     return r;
   }
   addEvent(runId: string, kind: RunEventKind, message: string): RunEvent {
@@ -354,7 +362,7 @@ function toRun(r: Row): Run {
     id: r.id, projectId: r.project_id, agentId: r.agent_id, ticketKey: r.ticket_key, ticketTitle: r.ticket_title,
     branch: r.branch, worktree: r.worktree, status: r.status, attempts: r.attempts, costUsd: r.cost_usd,
     prUrl: r.pr_url ?? null, error: r.error ?? null, area: r.area ?? null, sessionId: r.session_id ?? null, baseRef: r.base_ref ?? null,
-    prNumber: r.pr_number ?? null, reviewRounds: r.review_rounds ?? 0, checks: r.checks ?? null,
+    prNumber: r.pr_number ?? null, reviewRounds: r.review_rounds ?? 0, checks: r.checks ?? null, readyAt: r.ready_at ?? null,
     startedAt: r.started_at, endedAt: r.ended_at ?? null,
   };
 }

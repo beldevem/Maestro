@@ -271,7 +271,7 @@ export class Orchestrator {
         body: pullRequestBody(ticket, done.summary, done.gates, wf),
         draft: wf.pull_request.draft,
       });
-      store.updateRun(ctx.runId, { prUrl: pr.url, prNumber: pr.number });
+      store.updateRun(ctx.runId, { prUrl: pr.url, prNumber: pr.number, readyAt: new Date().toISOString() });
       this.log(ctx.runId, 'info', pr.url ? `Opened pull request ${pr.url}` : `Branch ${run.branch} is ready for review in Maestro.`);
 
       await pm.moveTicket(ticket.key, 'in_review').catch((e) => this.log(ctx.runId, 'error', `Could not move the ticket: ${e.message}`));

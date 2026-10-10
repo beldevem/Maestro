@@ -84,6 +84,7 @@ export interface Run {
   prNumber: number | null;
   reviewRounds: number;
   checks: ChecksState | null;
+  readyAt: string | null;
   startedAt: string;
   endedAt: string | null;
 }
@@ -126,6 +127,32 @@ export const CHECKS_LABEL: Record<ChecksState, string> = {
   failure: 'Checks failed',
   none: 'No checks',
 };
+
+export interface TicketMetrics {
+  ticketKey: string;
+  ticketTitle: string;
+  runs: number;
+  costUsd: number;
+  fixAttempts: number;
+  reviewRounds: number;
+  status: RunStatus;
+  cycleTimeMs: number | null;
+}
+
+export interface Metrics {
+  runs: number;
+  finished: number;
+  successRate: number | null;
+  byStatus: Partial<Record<RunStatus, number>>;
+  meanTimeToPrMs: number | null;
+  meanCycleTimeMs: number | null;
+  firstPassReviewRate: number | null;
+  meanFixAttempts: number | null;
+  meanReviewRounds: number | null;
+  totalCostUsd: number;
+  costPerTicketUsd: number | null;
+  tickets: TicketMetrics[];
+}
 
 export interface Alert {
   id: number;

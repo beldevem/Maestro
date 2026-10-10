@@ -18,6 +18,7 @@ import { NotReadyError, Orchestrator } from './orchestrator.js';
 import { git } from './proc.js';
 import { budgetState, dailyCap, startOfToday, usd } from './budget.js';
 import { readBaseMemory } from './memory.js';
+import { computeMetrics } from './metrics.js';
 import { KNOWN_SECRETS, type SecretStore } from './secrets.js';
 import type { Agent } from './types.js';
 import { blockedBy, checkReady, parseWorkflow, validateWorkflow } from './workflow.js';
@@ -391,6 +392,14 @@ export async function buildServer(d: ServerDeps): Promise<FastifyInstance> {
     const { ids } = z.object({ ids: z.array(z.number().int()).optional() }).parse(req.body ?? {});
     d.store.markAlertsRead(ids);
     return { ok: true };
+  });
+
+  // Metrics from the runs, for one project or all
+  app.get<{ Querystring: { projectId?: string; days?: string } }>('/api/metrics', async (req) => {
+    const days = Number(req.query.days ?? 0);
+    const since = days > 0 ? new Date(Date.now() - days * 86_400_000).toISOString() : '';
+    const runs = d.store.listAllRuns(req.query.projectId).filter((r) => r.startedAt >= since);
+    return computeMetrics(runs, (id) => d.store.listReviews(id));
   });
 
   // Spend and budgets

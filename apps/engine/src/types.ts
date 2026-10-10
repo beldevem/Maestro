@@ -106,6 +106,8 @@ export interface Run {
   reviewRounds: number;
   /** CI status of the PR's head commit, from polling the code host. */
   checks: ChecksState | null;
+  /** When the change first became ready for review (PR opened or branch ready). */
+  readyAt: string | null;
   startedAt: string;
   endedAt: string | null;
 }

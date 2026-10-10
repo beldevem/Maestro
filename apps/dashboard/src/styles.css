@@ -169,3 +169,9 @@ details { margin-bottom: 12px; }
 .alert-blocked, .alert-failed { background: var(--bad-soft); color: var(--bad); }
 .alert-budget { background: var(--warn-soft); color: var(--warn); }
 .alert-ready { background: var(--good-soft); color: var(--good); }
+.tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 12px; margin-bottom: 24px; }
+.tile { display: flex; flex-direction: column; gap: 2px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px 16px; }
+.tile-label { font-size: 12px; color: var(--muted); font-weight: 600; }
+.tile-value { font-size: 26px; font-weight: 650; font-variant-numeric: tabular-nums; color: var(--text); }
+.tile-note { font-size: 12px; color: var(--muted); }
+.table .num { text-align: right; font-variant-numeric: tabular-nums; }
