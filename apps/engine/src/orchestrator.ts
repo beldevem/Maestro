@@ -672,15 +672,18 @@ export class Orchestrator {
       await this.complete(runId, 'approved');
       return review;
     }
-    if (run.status === 'blocked') {
-      // Your guidance unblocks it: the worker picks the run up again with your feedback.
-      this.publishRun(store.updateRun(runId, { status: 'in_review', error: null })!);
-      const agent = store.getAgent(run.agentId);
-      if (agent?.state === 'blocked' && agent.currentRunId === runId) this.setAgent(agent.id, 'available', null, '');
-      this.log(runId, 'info', 'You gave the worker guidance; it picks the run up again.');
-    }
+    if (run.status === 'blocked') this.unblock(run, 'You gave the worker guidance; it picks the run up again.');
     void this.tick();
     return review;
+  }
+
+  /** New feedback on a blocked run sends it back to a worker. */
+  private unblock(run: Run, message: string): void {
+    const { store } = this.d;
+    this.publishRun(store.updateRun(run.id, { status: 'in_review', error: null })!);
+    const agent = store.getAgent(run.agentId);
+    if (agent?.state === 'blocked' && agent.currentRunId === run.id) this.setAgent(agent.id, 'available', null, '');
+    this.log(run.id, 'info', message);
   }
 
   /** Checks open PRs for merges, closes, CI status and new feedback. Never throws. */
@@ -689,7 +692,8 @@ export class Orchestrator {
     this.polling = true;
     const { store } = this.d;
     try {
-      for (const run of store.listRuns().filter((r) => r.status === 'in_review' && r.prNumber)) {
+      // Blocked runs too: you may merge, close or comment on their PR to get them moving.
+      for (const run of store.listRuns().filter((r) => ['in_review', 'blocked'].includes(r.status) && r.prNumber && !this.active.has(r.id))) {
         try {
           const project = store.getProject(run.projectId);
           if (!project || !parseWorkflow(project.workflowYaml).review.poll_pull_requests) continue;
@@ -715,6 +719,9 @@ export class Orchestrator {
             });
             this.publishReview(review);
             this.log(run.id, 'info', `New ${f.verdict === 'changes_requested' ? 'change request' : 'review'} from ${f.author} on the pull request.`);
+          }
+          if (run.status === 'blocked' && store.pendingFeedback(run.id).length) {
+            this.unblock(run, 'A change request on the pull request sends the run back to a worker.');
           }
         } catch (e) {
           console.error(`Polling the pull request of ${run.ticketKey} failed: ${e instanceof Error ? e.message : String(e)}`);

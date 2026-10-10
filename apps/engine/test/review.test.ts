@@ -259,6 +259,25 @@ describe('review loop', () => {
     expect(store.getManualTicket(project.id, ticket.key)!.status).toBe('done');
   });
 
+  it('follows the PR of a blocked run: a change request unblocks it, a merge finishes it', async () => {
+    const github = new FakeGitHub(repo);
+    const agent = new ScriptedAgent([changes, changes]);
+    const { orchestrator, project, worker, ticket } = setup(agent, { github, maxRounds: 0 });
+    const run = await orchestrator.start(project.id, ticket.key);
+    await waitFor(() => settled(store.getRun(run.id)!.status));
+    expect(store.getRun(run.id)!.status).toBe('blocked');
+
+    github.status = { ...github.status, feedback: [{ externalId: 'review:7', author: 'bel', verdict: 'changes_requested', body: 'Do it like this.', file: null, line: null, createdAt: '2026-10-10T10:00:00Z' }] };
+    await orchestrator.pollPullRequests();
+    await waitFor(() => agent.worker.length === 2 && settled(store.getRun(run.id)!.status));
+    expect(agent.worker[1].prompt).toContain('Do it like this.');
+
+    github.status = { ...github.status, state: 'merged' };
+    await orchestrator.pollPullRequests();
+    expect(store.getRun(run.id)!.status).toBe('done');
+    expect(store.getAgent(worker.id)!.state).toBe('available');
+  });
+
   it('stops the run when the PR is closed without merging', async () => {
     const github = new FakeGitHub(repo);
     const { orchestrator, project, ticket } = setup(new ScriptedAgent(), { github });
