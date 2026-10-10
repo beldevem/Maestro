@@ -99,6 +99,24 @@ describe('budgets', () => {
     await app.close();
   });
 
+  it('blocks instead of failing when the agent stops at a limit, so you can continue it', async () => {
+    const limit = (error: string): CodingAgent => ({
+      async run(): Promise<AgentOutcome> {
+        return { sessionId: 's1', text: '', costUsd: 0.2, ok: false, error };
+      },
+    });
+    const budget = await setup(limit('Agent stopped: error_max_budget_usd'));
+    const r1 = await budget.finish((await budget.orchestrator.start(budget.p.id, budget.ticket().key)).id);
+    expect(r1.status).toBe('blocked');
+    expect(r1.sessionId).toBe('s1');
+    expect(budget.store.listAlerts()[0].kind).toBe('budget');
+
+    const turns = await setup(limit('Agent stopped: error_max_turns'));
+    const r2 = await turns.finish((await turns.orchestrator.start(turns.p.id, turns.ticket().key)).id);
+    expect(r2.status).toBe('blocked');
+    expect(r2.error).toMatch(/used all its turns/);
+  });
+
   it('applies the default daily cap to projects without their own', async () => {
     const { store, p } = await setup(new CostlyAgent(0));
     store.setSetting('budget.projectDailyUsd', '1');

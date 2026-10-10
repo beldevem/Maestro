@@ -347,8 +347,17 @@ export class Orchestrator {
       });
       this.addCost(ctx, outcome.costUsd);
       if (signal.aborted) throw new Error('aborted');
-      if (!outcome.ok) throw new Error(outcome.error ?? 'The agent stopped without finishing.');
       if (outcome.sessionId) store.updateRun(ctx.runId, { sessionId: outcome.sessionId });
+      // Hitting a limit is recoverable (raise the budget, or give guidance and it continues), so it blocks rather than fails.
+      if (!outcome.ok && /error_max_budget_usd/.test(outcome.error ?? '')) {
+        this.block(ctx, this.budgetStop(ctx) ?? 'The agent stopped at its budget for this step.', `Budget reached on ${ticket.key}`, 'budget');
+        return null;
+      }
+      if (!outcome.ok && /error_max_turns/.test(outcome.error ?? '')) {
+        this.block(ctx, 'The agent used all its turns before finishing. Give it guidance to continue.', `Out of turns on ${ticket.key}`);
+        return null;
+      }
+      if (!outcome.ok) throw new Error(outcome.error ?? 'The agent stopped without finishing.');
       summary = outcome.text || summary;
 
       this.setAgent(agent.id, 'running_checks', ctx.runId, `Checking ${ticket.key}`);
