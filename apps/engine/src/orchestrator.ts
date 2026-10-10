@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { codeHostFor, type CodeHostAdapter } from './adapters/codehost/index.js';
+import { DESIGN_DIR, designContextFor } from './adapters/design/index.js';
 import { pmFor } from './adapters/pm/index.js';
 import type { CodingAgent } from './agents/coding-agent.js';
 import { fixPrompt, pullRequestBody, reviewFixPrompt, ticketPrompt, workerSystemPrompt } from './agents/prompts.js';
@@ -21,6 +22,8 @@ export interface OrchestratorDeps {
   worktreesDir: string;
   /** Override the code host, for tests. */
   codeHostFor?: (project: Project) => CodeHostAdapter;
+  /** Override fetch for design and docs connectors, for tests. */
+  fetch?: typeof fetch;
 }
 
 export class NotReadyError extends Error {
@@ -28,6 +31,9 @@ export class NotReadyError extends Error {
     super(`Ticket is not ready: ${reasons.join(' ')}`);
   }
 }
+
+/** What gets committed: everything except fetched design files. */
+const CHANGE_PATHS = ['--', '.', `:(exclude)${DESIGN_DIR}`];
 
 const BASE_TOOLS = ['Read', 'Write', 'Edit', 'MultiEdit', 'Glob', 'Grep', 'TodoWrite', 'Bash(git status:*)', 'Bash(git diff:*)', 'Bash(ls:*)'];
 
@@ -219,10 +225,15 @@ export class Orchestrator {
     const { store } = this.d;
     try {
       await pm.moveTicket(ticket.key, 'in_progress').catch((e) => this.log(ctx.runId, 'error', `Could not move the ticket: ${e.message}`));
-      const done = await this.implement(ctx, ticketPrompt(ticket), false);
+      const design = await designContextFor(project, ticket, ctx.worktree, this.d.secrets, this.d.fetch).catch((e) => {
+        this.log(ctx.runId, 'error', `No design context: ${e.message}`);
+        return null;
+      });
+      if (design) this.log(ctx.runId, 'info', `Design context from Figma is in ${DESIGN_DIR}/.`);
+      const done = await this.implement(ctx, ticketPrompt(ticket, design), false);
       if (!done) return;
 
-      if (!(await git(ctx.worktree, ['status', '--porcelain']))) {
+      if (!(await this.hasChanges(ctx))) {
         this.block(ctx, 'The agent finished without changing any files.', `Blocked on ${ticket.key}: no changes`);
         return;
       }
@@ -305,8 +316,12 @@ export class Orchestrator {
     }
   }
 
+  private async hasChanges(ctx: RunCtx): Promise<boolean> {
+    return !!(await git(ctx.worktree, ['status', '--porcelain', ...CHANGE_PATHS]));
+  }
+
   private async commit(ctx: RunCtx, message: string): Promise<void> {
-    await git(ctx.worktree, ['add', '-A']);
+    await git(ctx.worktree, ['add', '-A', ...CHANGE_PATHS]);
     const identity = (await git(ctx.worktree, ['config', 'user.email']).catch(() => ''))
       ? []
       : ['-c', 'user.name=Maestro', '-c', 'user.email=maestro@localhost'];
@@ -367,7 +382,7 @@ export class Orchestrator {
     const done = await this.implement(ctx, reviewFixPrompt(feedback), true);
     if (!done) return false;
     store.markReviewsAddressed(feedback.map((f) => f.id));
-    if (await git(ctx.worktree, ['status', '--porcelain'])) {
+    if (await this.hasChanges(ctx)) {
       await this.commit(ctx, ctx.wf.commit_convention === 'conventional'
         ? `fix: address review feedback [${ctx.ticket.key}]`
         : `Address review feedback [${ctx.ticket.key}]`);

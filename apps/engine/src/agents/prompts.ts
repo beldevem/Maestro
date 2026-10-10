@@ -34,13 +34,19 @@ ${gates}
 ${dod}`;
 }
 
-export function ticketPrompt(ticket: Ticket): string {
+export function ticketPrompt(ticket: Ticket, design?: string | null): string {
   return `Implement ticket ${ticket.key}: ${ticket.title}
 
 ${ticket.description || '(no description)'}
 
 Acceptance criteria:
-${ticket.acceptanceCriteria || '(none given)'}${ticket.url ? `\n\nTicket link: ${ticket.url}` : ''}`;
+${ticket.acceptanceCriteria || '(none given)'}${ticket.url ? `\n\nTicket link: ${ticket.url}` : ''}${design ? `
+
+## Design (from Figma)
+The designs for this ticket are in .maestro/design/ (context.md and PNG images you can open with Read). Match them.
+That folder is never committed; do not reference it from code.
+
+${design}` : ''}`;
 }
 
 export function fixPrompt(failed: GateResult, attempt: number, max: number): string {

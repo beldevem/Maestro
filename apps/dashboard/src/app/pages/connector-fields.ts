@@ -79,7 +79,7 @@ export function emptyConnectors(): ConnectorModel {
       </label>
       @if (m.design.provider === 'figma') {
         <label>File key or URL <input [(ngModel)]="m.design.settings['file']" name="figma-file" /></label>
-        <p class="hint">Agents get design context in a later phase; the link is saved now.</p>
+        <p class="hint">Tickets that link a Figma frame (a URL with node-id) give the worker that frame's names, text and a PNG. UI tickets (labels ui, frontend or area:ui) with no link get this file's pages and frames. Add the Figma token in Settings.</p>
       }
     </fieldset>
   `,

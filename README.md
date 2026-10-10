@@ -21,6 +21,7 @@ This covers Phases 0 to 3 of the plan: the board, worker agents, agent states, c
 - **Reviewer agent** (Phase 3): once the gates pass, a reviewer agent (read-only, its own model setting) checks the change against the ticket's acceptance criteria, the best practices and the Definition of Done, and returns approve or changes requested with file and line comments. On GitHub it is posted as a real PR review (as a comment when GitHub refuses a self-approval). On changes requested the worker resumes in the same worktree and session, fixes, re-runs the gates and pushes to the same branch; then the reviewer looks again, up to `review.max_rounds` (default 2) before the ticket is blocked for you.
 - **Your review**: on the run page you can request changes (a worker picks them up) or approve, which moves the ticket to done and removes the worktree. Open PRs are polled every minute for your review comments (line comments, "changes requested" reviews, or a comment mentioning @maestro), CI check status and merges; a merge finishes the ticket, closing the PR stops the run.
 - **Pull requests screen** lists every change in review with its CI status, the reviewer agent's verdict, open comments, rounds and cost.
+- **Design context from Figma**: when a ticket links a Figma frame, the worker gets the frame's name, its parts and all its text in the prompt, plus a PNG export, under `.maestro/design/` in its worktree (never committed). UI tickets without a link get the project file's pages and frames.
 - **Planner** (Phase 2): "Plan backlog" on the board reads the requirements and the code (read-only) and drafts small tickets, each with acceptance criteria, a size, an `area:` label and dependencies. You edit the draft, then create the tickets in the PM tool in order. Dependencies are kept in Maestro and written into each ticket as "Depends on: KEY".
 - **Auto-assign** (Phase 2): with the board toggle on (or `orchestration.auto_assign` in the workflow config), Maestro hands ready to-do tickets to free workers every 15 seconds and whenever a run ends. It skips tickets whose dependencies are not finished (`dependency_ready_when: done` or `in_review`), runs at most `max_parallel` tickets per project, and with `one_per_area` never runs two tickets with the same `area:` label at once. Blocked cards show "Waits on KEY".
 - **Chat** per project answers questions using the project knowledge, its tickets, its runs and a read-only look at the code.
@@ -31,7 +32,6 @@ This covers Phases 0 to 3 of the plan: the board, worker agents, agent states, c
 
 - Dependency links in Jira and Trello themselves: Maestro keeps dependencies in its own database and writes them into the ticket text.
 - GitLab and Bitbucket adapters (the code host interface is ready for them).
-- Design context from Figma for agents (the link is saved on the project).
 - Secrets in the OS keychain. For now they are in `~/.maestro/secrets.json`, readable only by you.
 
 ## Requirements
