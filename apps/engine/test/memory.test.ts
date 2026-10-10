@@ -95,6 +95,17 @@ describe('memory in runs', () => {
     await app.close();
   });
 
+  it('shows empty memory for a remote project that is not cloned yet, without cloning it', async () => {
+    const { app, store } = await setup(() => ({ text: '', write: false }));
+    const remote = store.createProject({
+      name: 'Remote', description: '', codeHost: { provider: 'github', repo: 'someone/not-cloned', defaultBranch: 'main' },
+      pm: { provider: 'manual', settings: {} }, design: { provider: 'none', settings: {} }, context: '', requirements: '', bestPractices: '',
+    });
+    const res = await app.inject({ method: 'GET', url: `/api/projects/${remote.id}/memory` });
+    expect(res.json()).toEqual({ content: '', pending: false });
+    await app.close();
+  });
+
   it('does not count a memory edit as the worker changing something', async () => {
     const { app, store, orchestrator, p, t, finish } = await setup(() => ({ text: 'Nothing to do.', write: false }));
     await app.inject({ method: 'PUT', url: `/api/projects/${p.id}/memory`, payload: { content: 'edited' } });

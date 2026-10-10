@@ -390,8 +390,9 @@ export async function buildServer(d: ServerDeps): Promise<FastifyInstance> {
     const p = project(req.params.id);
     const pending = d.store.getSetting(`memory.${p.id}`);
     if (pending !== undefined) return { content: pending, pending: true };
-    const path = await codeHostFor(p, d.secrets, d.reposDir).ensureRepo(p).catch(() => '');
-    const content = path ? await readBaseMemory(path, parseWorkflow(p.workflowYaml).base_branch) : '';
+    // Only read what is already on disk: viewing the Knowledge tab must not clone the repository.
+    const path = repoDir(p);
+    const content = existsSync(path) ? await readBaseMemory(path, parseWorkflow(p.workflowYaml).base_branch) : '';
     return { content, pending: false };
   });
   app.put<{ Params: { id: string } }>('/api/projects/:id/memory', async (req) => {
