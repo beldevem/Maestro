@@ -97,7 +97,11 @@ export async function buildServer(d: ServerDeps): Promise<FastifyInstance> {
   app.get<{ Params: { id: string } }>('/api/projects/:id', async (req) => project(req.params.id));
   app.patch<{ Params: { id: string } }>('/api/projects/:id', async (req) => {
     project(req.params.id);
-    const patch = projectSchema.partial().parse(req.body);
+    // partial() still fills in defaults, so keep only the fields the request sent; otherwise saving one tab resets the others.
+    const sent = Object.keys((req.body ?? {}) as object);
+    const patch = Object.fromEntries(
+      Object.entries(projectSchema.partial().parse(req.body)).filter(([k]) => sent.includes(k)),
+    ) as Partial<z.infer<typeof projectSchema>>;
     if (patch.workflowYaml !== undefined) {
       const v = validateWorkflow(patch.workflowYaml);
       if (!v.ok) throw new Error(`Workflow config: ${v.error}`);

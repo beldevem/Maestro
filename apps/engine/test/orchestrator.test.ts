@@ -149,6 +149,13 @@ describe('worker run end to end on a local repo', () => {
     expect(settings.body).not.toContain('secret-value');
     expect(settings.json().secrets.find((s: { name: string }) => s.name === 'GITHUB_TOKEN').set).toBe(true);
 
+    await app.inject({ method: 'PATCH', url: `/api/projects/${projectId}`, payload: { pm: { provider: 'jira', settings: { projectKey: 'API' } }, design: { provider: 'figma', settings: { file: 'F1' } } } });
+    await app.inject({ method: 'PATCH', url: `/api/projects/${projectId}`, payload: { context: 'Only the knowledge tab.' } });
+    const kept = store.getProject(projectId)!;
+    expect(kept.context).toBe('Only the knowledge tab.');
+    expect(kept.pm).toEqual({ provider: 'jira', settings: { projectKey: 'API' } });
+    expect(kept.design.provider).toBe('figma');
+
     const bad = await app.inject({ method: 'PATCH', url: `/api/projects/${projectId}`, payload: { workflowYaml: 'max_fix_attempts: lots' } });
     expect(bad.statusCode).toBe(400);
     await app.close();
