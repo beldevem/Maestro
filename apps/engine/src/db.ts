@@ -50,6 +50,7 @@ CREATE TABLE IF NOT EXISTS ticket_deps (
 
 /** Columns added after the first release, for databases created before them. */
 const COLUMNS: { table: string; column: string; ddl: string }[] = [
+  { table: 'projects', column: 'docs', ddl: `ALTER TABLE projects ADD COLUMN docs TEXT NOT NULL DEFAULT '{"provider":"none","settings":{}}'` },
   { table: 'runs', column: 'area', ddl: 'ALTER TABLE runs ADD COLUMN area TEXT' },
   { table: 'runs', column: 'session_id', ddl: 'ALTER TABLE runs ADD COLUMN session_id TEXT' },
   { table: 'runs', column: 'base_ref', ddl: 'ALTER TABLE runs ADD COLUMN base_ref TEXT' },
@@ -82,14 +83,17 @@ export class Store {
     const row = this.db.prepare('SELECT * FROM projects WHERE id = ?').get(id) as Row | undefined;
     return row ? toProject(row) : undefined;
   }
-  createProject(input: Omit<Project, 'id' | 'createdAt' | 'workflowYaml'> & { workflowYaml?: string }): Project {
-    const p: Project = { ...input, workflowYaml: input.workflowYaml || DEFAULT_WORKFLOW_YAML, id: randomUUID(), createdAt: now() };
+  createProject(input: Omit<Project, 'id' | 'createdAt' | 'workflowYaml' | 'docs'> & { workflowYaml?: string; docs?: Project['docs'] }): Project {
+    const p: Project = {
+      ...input, docs: input.docs ?? { provider: 'none', settings: {} }, workflowYaml: input.workflowYaml || DEFAULT_WORKFLOW_YAML,
+      id: randomUUID(), createdAt: now(),
+    };
     this.db
       .prepare(
-        `INSERT INTO projects (id, name, description, code_host, pm, design, context, requirements, best_practices, workflow_yaml, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO projects (id, name, description, code_host, pm, design, docs, context, requirements, best_practices, workflow_yaml, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
-      .run(p.id, p.name, p.description, JSON.stringify(p.codeHost), JSON.stringify(p.pm), JSON.stringify(p.design),
+      .run(p.id, p.name, p.description, JSON.stringify(p.codeHost), JSON.stringify(p.pm), JSON.stringify(p.design), JSON.stringify(p.docs),
         p.context, p.requirements, p.bestPractices, p.workflowYaml, p.createdAt);
     return p;
   }
@@ -99,10 +103,10 @@ export class Store {
     const p = { ...current, ...patch };
     this.db
       .prepare(
-        `UPDATE projects SET name = ?, description = ?, code_host = ?, pm = ?, design = ?, context = ?, requirements = ?,
+        `UPDATE projects SET name = ?, description = ?, code_host = ?, pm = ?, design = ?, docs = ?, context = ?, requirements = ?,
          best_practices = ?, workflow_yaml = ? WHERE id = ?`,
       )
-      .run(p.name, p.description, JSON.stringify(p.codeHost), JSON.stringify(p.pm), JSON.stringify(p.design),
+      .run(p.name, p.description, JSON.stringify(p.codeHost), JSON.stringify(p.pm), JSON.stringify(p.design), JSON.stringify(p.docs),
         p.context, p.requirements, p.bestPractices, p.workflowYaml, id);
     return p;
   }
@@ -292,7 +296,7 @@ export class Store {
 function toProject(r: Row): Project {
   return {
     id: r.id, name: r.name, description: r.description,
-    codeHost: JSON.parse(r.code_host), pm: JSON.parse(r.pm), design: JSON.parse(r.design),
+    codeHost: JSON.parse(r.code_host), pm: JSON.parse(r.pm), design: JSON.parse(r.design), docs: JSON.parse(r.docs),
     context: r.context, requirements: r.requirements, bestPractices: r.best_practices,
     workflowYaml: r.workflow_yaml, createdAt: r.created_at,
   };

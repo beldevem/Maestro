@@ -10,6 +10,7 @@ export interface Project {
   codeHost: { provider: 'github' | 'local'; repo?: string; localPath?: string; defaultBranch: string };
   pm: { provider: 'manual' | 'jira' | 'trello'; settings: Record<string, string> };
   design: { provider: 'none' | 'figma'; settings: Record<string, string> };
+  docs: { provider: 'none' | 'confluence'; settings: Record<string, string> };
   context: string;
   requirements: string;
   bestPractices: string;

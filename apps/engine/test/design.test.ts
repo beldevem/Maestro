@@ -37,7 +37,7 @@ function fakeFigma(calls: string[] = []): typeof fetch {
 function project(file = ''): Project {
   return {
     id: 'p1', name: 'Demo', description: '', codeHost: { provider: 'local', localPath: '/x', defaultBranch: 'main' },
-    pm: { provider: 'manual', settings: {} }, design: { provider: 'figma', settings: { file } },
+    pm: { provider: 'manual', settings: {} }, design: { provider: 'figma', settings: { file } }, docs: { provider: 'none', settings: {} },
     context: '', requirements: '', bestPractices: '', workflowYaml: '', createdAt: '',
   };
 }

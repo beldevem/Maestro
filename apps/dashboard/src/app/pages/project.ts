@@ -155,7 +155,7 @@ type Tab = 'board' | 'knowledge' | 'workflow' | 'runs' | 'chat' | 'connectors';
         }
 
         @case ('connectors') {
-          <form class="panel" (ngSubmit)="save({ codeHost: p.codeHost, pm: p.pm, design: p.design })">
+          <form class="panel" (ngSubmit)="save({ codeHost: p.codeHost, pm: p.pm, design: p.design, docs: p.docs })">
             <app-connector-fields [model]="p" />
             <div class="row">
               <button class="primary" type="submit">Save</button>

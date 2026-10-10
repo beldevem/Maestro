@@ -72,12 +72,13 @@ export async function draftBacklog(
   project: Project,
   existingTickets: Ticket[],
   cwd: string,
+  docs?: string | null,
 ): Promise<BacklogDraft> {
   const key = deps.secrets.get('ANTHROPIC_API_KEY');
   const out = await deps.agent.run({
     cwd,
     prompt: 'Draft the backlog for this project now.',
-    systemPrompt: plannerSystemPrompt(project, existingTickets),
+    systemPrompt: plannerSystemPrompt(project, existingTickets, docs),
     model: deps.store.getSetting('model.planner') || 'claude-opus-5-5',
     allowedTools: ['Read', 'Glob', 'Grep'],
     maxTurns: 40,

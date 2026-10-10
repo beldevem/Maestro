@@ -2,6 +2,7 @@ import { existsSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { codeHostFor, type CodeHostAdapter } from './adapters/codehost/index.js';
 import { DESIGN_DIR, designContextFor } from './adapters/design/index.js';
+import { docsContextFor } from './adapters/docs/index.js';
 import { pmFor } from './adapters/pm/index.js';
 import type { CodingAgent } from './agents/coding-agent.js';
 import { fixPrompt, pullRequestBody, reviewFixPrompt, ticketPrompt, workerSystemPrompt } from './agents/prompts.js';
@@ -49,6 +50,8 @@ interface RunCtx {
   pm: ReturnType<typeof pmFor>;
   signal: AbortSignal;
   env: Record<string, string>;
+  /** Confluence pages for the project and ticket, as text. */
+  docs: string | null;
 }
 
 export class Orchestrator {
@@ -111,7 +114,7 @@ export class Orchestrator {
     this.setAgent(agent.id, 'working', run.id, `On ${ticket.key}`);
     this.log(run.id, 'info', `${agent.name} picked up ${ticket.key} on branch ${branch} from ${baseRef}.`);
     this.launch(run.id, (signal) =>
-      this.work({ runId: run.id, project, wf, ticket, agent, worktree, repoPath, codeHost, pm, signal, env: this.agentEnv() }),
+      this.work({ runId: run.id, project, wf, ticket, agent, worktree, repoPath, codeHost, pm, signal, env: this.agentEnv(), docs: null }),
     );
     return run;
   }
@@ -230,6 +233,7 @@ export class Orchestrator {
         return null;
       });
       if (design) this.log(ctx.runId, 'info', `Design context from Figma is in ${DESIGN_DIR}/.`);
+      ctx.docs = await this.docsFor(ctx);
       const done = await this.implement(ctx, ticketPrompt(ticket, design), false);
       if (!done) return;
 
@@ -281,7 +285,7 @@ export class Orchestrator {
       const outcome = await this.d.agent.run({
         cwd: ctx.worktree,
         prompt,
-        systemPrompt: workerSystemPrompt(project, wf),
+        systemPrompt: workerSystemPrompt(project, wf, ctx.docs),
         model: this.workerModel(agent),
         allowedTools: tools,
         resume: this.run(ctx).sessionId ?? undefined,
@@ -451,7 +455,18 @@ export class Orchestrator {
       await git(repoPath, ['worktree', 'prune']);
       await git(repoPath, ['worktree', 'add', run.worktree, run.branch]);
     }
-    return { runId: run.id, project, wf, ticket, agent, worktree: run.worktree, repoPath, codeHost, pm, signal, env: this.agentEnv() };
+    const ctx: RunCtx = { runId: run.id, project, wf, ticket, agent, worktree: run.worktree, repoPath, codeHost, pm, signal, env: this.agentEnv(), docs: null };
+    ctx.docs = await this.docsFor(ctx);
+    return ctx;
+  }
+
+  private async docsFor(ctx: RunCtx): Promise<string | null> {
+    const docs = await docsContextFor(ctx.project, this.d.secrets, `${ctx.ticket.description}\n${ctx.ticket.acceptanceCriteria}`, this.d.fetch).catch((e) => {
+      this.log(ctx.runId, 'error', `No Confluence docs: ${e.message}`);
+      return null;
+    });
+    if (docs) this.log(ctx.runId, 'info', 'Added the Confluence docs to the worker\'s context.');
+    return docs;
   }
 
   private host(project: Project): CodeHostAdapter {

@@ -2,17 +2,18 @@ import { Component, input } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import type { Project } from '../models';
 
-export type ConnectorModel = Pick<Project, 'codeHost' | 'pm' | 'design'>;
+export type ConnectorModel = Pick<Project, 'codeHost' | 'pm' | 'design' | 'docs'>;
 
 export function emptyConnectors(): ConnectorModel {
   return {
     codeHost: { provider: 'github', repo: '', localPath: '', defaultBranch: 'main' },
     pm: { provider: 'manual', settings: {} },
     design: { provider: 'none', settings: {} },
+    docs: { provider: 'none', settings: {} },
   };
 }
 
-/** Code host, PM tool and design tool choices for a project. Edits the model in place. */
+/** Code host, PM tool, design tool and docs choices for a project. Edits the model in place. */
 @Component({
   selector: 'app-connector-fields',
   imports: [FormsModule],
@@ -80,6 +81,26 @@ export function emptyConnectors(): ConnectorModel {
       @if (m.design.provider === 'figma') {
         <label>File key or URL <input [(ngModel)]="m.design.settings['file']" name="figma-file" /></label>
         <p class="hint">Tickets that link a Figma frame (a URL with node-id) give the worker that frame's names, text and a PNG. UI tickets (labels ui, frontend or area:ui) with no link get this file's pages and frames. Add the Figma token in Settings.</p>
+      }
+    </fieldset>
+
+    <fieldset>
+      <legend>Docs</legend>
+      <label>Docs tool
+        <select [(ngModel)]="m.docs.provider" name="docs-provider">
+          <option value="none">None</option>
+          <option value="confluence">Confluence</option>
+        </select>
+      </label>
+      @if (m.docs.provider === 'confluence') {
+        <label>Pages <textarea [(ngModel)]="m.docs.settings['pages']" name="docs-pages" rows="3" placeholder="One page URL or id per line"></textarea></label>
+        @if (m.pm.provider !== 'jira') {
+          <div class="row">
+            <label>Site URL <input [(ngModel)]="m.docs.settings['baseUrl']" name="docs-url" placeholder="https://your-team.atlassian.net" /></label>
+            <label>Account email <input [(ngModel)]="m.docs.settings['email']" name="docs-email" type="email" /></label>
+          </div>
+        }
+        <p class="hint">The planner and workers read these pages, plus any Confluence page linked in the requirements or a ticket. Uses {{ m.pm.provider === 'jira' ? 'the Jira site and email above' : 'this site and email' }} with the Atlassian API token from Settings.</p>
       }
     </fieldset>
   `,

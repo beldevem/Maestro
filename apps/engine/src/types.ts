@@ -22,6 +22,14 @@ export interface DesignConfig {
   settings: Record<string, string>;
 }
 
+export type DocsProvider = 'none' | 'confluence';
+
+export interface DocsConfig {
+  provider: DocsProvider;
+  /** Confluence: pages (URLs or ids, one per line); baseUrl and email when the PM tool is not Jira. */
+  settings: Record<string, string>;
+}
+
 export interface Project {
   id: string;
   name: string;
@@ -29,6 +37,7 @@ export interface Project {
   codeHost: CodeHostConfig;
   pm: PmConfig;
   design: DesignConfig;
+  docs: DocsConfig;
   context: string;
   requirements: string;
   bestPractices: string;

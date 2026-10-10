@@ -7,6 +7,7 @@ import { join } from 'node:path';
 import { z } from 'zod';
 import { codeHostFor } from './adapters/codehost/index.js';
 import { pmFor } from './adapters/pm/index.js';
+import { docsContextFor } from './adapters/docs/index.js';
 import { askAssistant } from './agents/assistant.js';
 import { approveDraft, backlogItemSchema, cleanItems, draftBacklog } from './agents/planner.js';
 import type { CodingAgent } from './agents/coding-agent.js';
@@ -34,12 +35,14 @@ const codeHostSchema = z.object({
 });
 const pmSchema = z.object({ provider: z.enum(['manual', 'jira', 'trello']), settings: z.record(z.string(), z.string()).default({}) });
 const designSchema = z.object({ provider: z.enum(['none', 'figma']), settings: z.record(z.string(), z.string()).default({}) });
+const docsSchema = z.object({ provider: z.enum(['none', 'confluence']), settings: z.record(z.string(), z.string()).default({}) });
 const projectSchema = z.object({
   name: z.string().min(1),
   description: z.string().default(''),
   codeHost: codeHostSchema,
   pm: pmSchema.default({ provider: 'manual', settings: {} }),
   design: designSchema.default({ provider: 'none', settings: {} }),
+  docs: docsSchema.default({ provider: 'none', settings: {} }),
   context: z.string().default(''),
   requirements: z.string().default(''),
   bestPractices: z.string().default(''),
@@ -161,7 +164,8 @@ export async function buildServer(d: ServerDeps): Promise<FastifyInstance> {
     try {
       const tickets = await pmFor(p, d.store, d.secrets).listTickets();
       const cwd = existsSync(repoDir(p)) ? repoDir(p) : tmpdir();
-      return await draftBacklog(d, p, tickets, cwd);
+      const docs = await docsContextFor(p, d.secrets);
+      return await draftBacklog(d, p, tickets, cwd, docs);
     } finally {
       planning.delete(p.id);
     }

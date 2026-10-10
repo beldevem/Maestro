@@ -92,7 +92,7 @@ describe('auto-assign', () => {
     const started = await orchestrator.tick();
     expect(started.map((r) => r.ticketKey)).toEqual([api.key, ui.key]);
     expect(running()).toEqual([api.key, ui.key]);
-    expect(agent.calls).toHaveLength(2);
+    await waitFor(() => agent.calls.length === 2);
     expect(store.listRuns(project.id).find((r) => r.ticketKey === api.key)!.area).toBe('api');
     expect(new Set(store.listRuns(project.id).map((r) => r.agentId)).size).toBe(2);
 
