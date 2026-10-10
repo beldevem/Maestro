@@ -9,7 +9,7 @@
     "dev:dashboard": "npm --prefix apps/dashboard start",
     "build": "npm --prefix apps/dashboard run build",
     "start": "npm --prefix apps/engine start",
-    "test": "npm --prefix apps/engine test && npm --prefix apps/engine run typecheck && npm --prefix apps/dashboard test"
+    "test": "npm --prefix apps/engine test && npm --prefix apps/engine run typecheck && npm --prefix apps/dashboard run typecheck && npm --prefix apps/dashboard test"
   },
   "engines": { "node": ">=22.22.3" }
 }
