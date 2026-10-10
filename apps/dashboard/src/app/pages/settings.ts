@@ -34,6 +34,7 @@ import type { SecretInfo } from '../models';
       <label>Worker model <input [(ngModel)]="settings['model.worker']" name="mw" /></label>
       <label>Chat model <input [(ngModel)]="settings['model.assistant']" name="ma" /></label>
       <label>Planner model <input [(ngModel)]="settings['model.planner']" name="mp" /></label>
+      <label>Reviewer model <input [(ngModel)]="settings['model.reviewer']" name="mr" /></label>
       <label>Tickets worked on at once <input type="number" min="1" [(ngModel)]="settings['maxConcurrentRuns']" name="mc" /></label>
       <label>Budget per run, USD <input type="number" min="0" step="0.5" [(ngModel)]="settings['budget.perRunUsd']" name="bud" /></label>
       <button class="primary" type="submit">Save</button>

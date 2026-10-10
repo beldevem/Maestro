@@ -69,7 +69,9 @@ export interface Agent {
   note: string;
 }
 
-export type RunStatus = 'running' | 'in_review' | 'blocked' | 'failed' | 'stopped';
+/** reviewing: the reviewer agent is looking at it. in_review: waiting for you or the PR. done: approved or merged. */
+export type RunStatus = 'running' | 'reviewing' | 'in_review' | 'done' | 'blocked' | 'failed' | 'stopped';
+export type ChecksState = 'pending' | 'success' | 'failure' | 'none';
 
 export interface Run {
   id: string;
@@ -86,6 +88,13 @@ export interface Run {
   error: string | null;
   /** The ticket's `area:` label, so one_per_area works without asking the PM tool. */
   area: string | null;
+  /** Agent SDK session, resumed when the worker addresses review comments. */
+  sessionId: string | null;
+  baseRef: string | null;
+  prNumber: number | null;
+  reviewRounds: number;
+  /** CI status of the PR's head commit, from polling the code host. */
+  checks: ChecksState | null;
   startedAt: string;
   endedAt: string | null;
 }
@@ -125,4 +134,29 @@ export interface BacklogDraft {
   costUsd: number;
   createdAt: string;
   approvedAt: string | null;
+}
+
+export type ReviewVerdict = 'approve' | 'changes_requested' | 'comment';
+export type ReviewSource = 'agent' | 'human' | 'github';
+
+export interface ReviewComment {
+  file: string | null;
+  line: number | null;
+  body: string;
+}
+
+export interface Review {
+  id: string;
+  runId: string;
+  source: ReviewSource;
+  verdict: ReviewVerdict;
+  summary: string;
+  comments: ReviewComment[];
+  author: string | null;
+  /** Id on the code host, so polled reviews are stored once and our own posts are skipped. */
+  externalId: string | null;
+  /** True once a worker has dealt with it (or it needs no work). */
+  addressed: boolean;
+  costUsd: number;
+  createdAt: string;
 }

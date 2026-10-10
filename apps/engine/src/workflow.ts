@@ -37,6 +37,11 @@ definition_of_done:
 pull_request:
   draft: true
 
+review:
+  enabled: true                    # a reviewer agent reviews each change before it waits for you
+  max_rounds: 2                    # review-and-fix rounds before the ticket is blocked for you
+  poll_pull_requests: true         # watch open PRs for your review comments, CI checks and merges
+
 orchestration:
   auto_assign: false               # assign ready tickets to free workers on their own (the board toggle overrides this)
   dependency_ready_when: done      # or in_review: start a ticket once what it depends on is in review
@@ -63,6 +68,13 @@ export const workflowSchema = z.object({
   allowed_commands: z.array(z.string()).default([]),
   definition_of_done: z.array(z.string()).default([]),
   pull_request: z.object({ draft: z.boolean().default(true) }).default({ draft: true }),
+  review: z
+    .object({
+      enabled: z.boolean().default(true),
+      max_rounds: z.number().int().min(0).default(2),
+      poll_pull_requests: z.boolean().default(true),
+    })
+    .default({ enabled: true, max_rounds: 2, poll_pull_requests: true }),
   orchestration: z
     .object({
       auto_assign: z.boolean().default(false),

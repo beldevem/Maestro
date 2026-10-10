@@ -76,7 +76,7 @@ type Tab = 'board' | 'knowledge' | 'workflow' | 'runs' | 'chat' | 'connectors';
                     </div>
                     <p>{{ t.title }}</p>
                     @if (activeRun(t.key); as r) {
-                      <a class="state state-working" [routerLink]="['/runs', r.id]">Agent working</a>
+                      <a class="state state-working" [routerLink]="['/runs', r.id]">{{ r.status === 'reviewing' ? 'Being reviewed' : 'Agent working' }}</a>
                     } @else if (t.status === 'todo' || t.status === 'in_progress') {
                       @if (t.blockedBy.length) {
                         <p class="warn">Waits on {{ t.blockedBy.join(', ') }}</p>
@@ -274,7 +274,7 @@ export class ProjectPage {
   }
 
   activeRun(key: string) {
-    return this.projectRuns().find((r) => r.ticketKey === key && r.status === 'running');
+    return this.projectRuns().find((r) => r.ticketKey === key && (r.status === 'running' || r.status === 'reviewing'));
   }
 
   async loadTickets(): Promise<void> {

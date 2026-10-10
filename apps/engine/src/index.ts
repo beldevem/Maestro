@@ -28,3 +28,5 @@ console.log(`Maestro engine on http://${HOST}:${PORT}`);
 // Auto-assign: pick up ready tickets for projects that have it on.
 setInterval(() => void orchestrator.tick(), 15_000);
 void orchestrator.tick();
+// No webhooks on a local machine: poll open pull requests for reviews, CI checks and merges.
+setInterval(() => void orchestrator.pollPullRequests(), 60_000);

@@ -17,11 +17,16 @@ quality_gates:
 max_fix_attempts: 2
 `;
 
-/** Writes hello.txt: wrong on the first try, right once asked to fix (unless `never` is set). */
+/** Writes hello.txt: wrong on the first try, right once asked to fix (unless `never` is set). Approves as reviewer. */
 class FakeAgent implements CodingAgent {
   calls: AgentTask[] = [];
+  reviews: AgentTask[] = [];
   constructor(private readonly never = false) {}
   async run(task: AgentTask): Promise<AgentOutcome> {
+    if (task.outputSchema) {
+      this.reviews.push(task);
+      return { sessionId: 'review', text: '', costUsd: 0.02, ok: true, structured: { verdict: 'approve', summary: 'Looks right.', comments: [] } };
+    }
     this.calls.push(task);
     const fixing = task.prompt.includes('quality gate failed');
     writeFileSync(join(task.cwd, 'hello.txt'), fixing && !this.never ? 'hello\n' : 'helo\n');
@@ -29,6 +34,8 @@ class FakeAgent implements CodingAgent {
     return { sessionId: 'session-1', text: 'Added hello.txt', costUsd: 0.01, ok: true };
   }
 }
+
+const settled = (s: string) => !['running', 'reviewing'].includes(s);
 
 async function waitFor(check: () => boolean, ms = 10_000): Promise<void> {
   const until = Date.now() + ms;
@@ -75,7 +82,7 @@ describe('worker run end to end on a local repo', () => {
 
     const run = await orchestrator.start(project.id, ticket.key);
     expect(run.branch).toBe('feat/DEM-1-say-hello');
-    await waitFor(() => store.getRun(run.id)!.status !== 'running');
+    await waitFor(() => settled(store.getRun(run.id)!.status));
 
     const done = store.getRun(run.id)!;
     expect(done.status).toBe('in_review');
@@ -83,6 +90,10 @@ describe('worker run end to end on a local repo', () => {
     expect(agent.calls).toHaveLength(2);
     expect(agent.calls[1].resume).toBe('session-1');
     expect(agent.calls[0].systemPrompt).toContain('Keep it small.');
+    expect(agent.reviews).toHaveLength(1);
+    expect(agent.reviews[0].allowedTools).not.toContain('Write');
+    expect(store.listReviews(run.id).map((r) => r.verdict)).toEqual(['approve']);
+    expect(done.costUsd).toBeCloseTo(0.04);
     expect(await git(repo, ['log', '-1', '--format=%s', done.branch])).toBe('feat: say hello [DEM-1]');
     expect(readFileSync(join(done.worktree, 'hello.txt'), 'utf8')).toBe('hello\n');
     expect(store.getManualTicket(project.id, ticket.key)!.status).toBe('in_review');
@@ -94,7 +105,7 @@ describe('worker run end to end on a local repo', () => {
     const { orchestrator, project, worker } = setup(new FakeAgent(true));
     const ticket = store.createManualTicket(project.id, 'DEM', { title: 'Say hello', description: '', acceptanceCriteria: 'x', labels: [] });
     const run = await orchestrator.start(project.id, ticket.key);
-    await waitFor(() => store.getRun(run.id)!.status !== 'running');
+    await waitFor(() => settled(store.getRun(run.id)!.status));
     expect(store.getRun(run.id)!.status).toBe('blocked');
     expect(store.getAgent(worker.id)!.state).toBe('blocked');
   });
@@ -104,7 +115,7 @@ describe('worker run end to end on a local repo', () => {
     const ticket = store.createManualTicket(project.id, 'DEM', { title: 'Vague', description: '', acceptanceCriteria: '', labels: [] });
     await expect(orchestrator.start(project.id, ticket.key)).rejects.toThrow(/Acceptance criteria/);
     const run = await orchestrator.start(project.id, ticket.key, { force: true });
-    await waitFor(() => store.getRun(run.id)!.status !== 'running');
+    await waitFor(() => settled(store.getRun(run.id)!.status));
   });
 
   it('serves the same flow over the API', async () => {
@@ -126,7 +137,7 @@ describe('worker run end to end on a local repo', () => {
     const started = await app.inject({ method: 'POST', url: `/api/projects/${projectId}/tickets/API-1/start`, payload: {} });
     expect(started.statusCode).toBe(200);
     const runId = started.json().id;
-    await waitFor(() => store.getRun(runId)!.status !== 'running');
+    await waitFor(() => settled(store.getRun(runId)!.status));
 
     const run = await app.inject({ method: 'GET', url: `/api/runs/${runId}` });
     expect(run.json().status).toBe('in_review');

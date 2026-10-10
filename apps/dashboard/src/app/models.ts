@@ -1,6 +1,7 @@
 export type AgentState = 'available' | 'working' | 'running_checks' | 'waiting_review' | 'addressing_review' | 'blocked' | 'paused';
 export type TicketStatus = 'todo' | 'in_progress' | 'in_review' | 'done';
-export type RunStatus = 'running' | 'in_review' | 'blocked' | 'failed' | 'stopped';
+export type RunStatus = 'running' | 'reviewing' | 'in_review' | 'done' | 'blocked' | 'failed' | 'stopped';
+export type ChecksState = 'pending' | 'success' | 'failure' | 'none';
 
 export interface Project {
   id: string;
@@ -77,9 +78,53 @@ export interface Run {
   prUrl: string | null;
   error: string | null;
   area: string | null;
+  sessionId: string | null;
+  baseRef: string | null;
+  prNumber: number | null;
+  reviewRounds: number;
+  checks: ChecksState | null;
   startedAt: string;
   endedAt: string | null;
 }
+
+export interface ReviewComment {
+  file: string | null;
+  line: number | null;
+  body: string;
+}
+
+export interface Review {
+  id: string;
+  runId: string;
+  source: 'agent' | 'human' | 'github';
+  verdict: 'approve' | 'changes_requested' | 'comment';
+  summary: string;
+  comments: ReviewComment[];
+  author: string | null;
+  addressed: boolean;
+  costUsd: number;
+  createdAt: string;
+}
+
+export interface PullRequestRow extends Run {
+  projectName: string;
+  reviewerVerdict: Review['verdict'] | null;
+  openComments: number;
+  reviewCount: number;
+}
+
+export const VERDICT_LABEL: Record<Review['verdict'], string> = {
+  approve: 'Approved',
+  changes_requested: 'Changes requested',
+  comment: 'Commented',
+};
+
+export const CHECKS_LABEL: Record<ChecksState, string> = {
+  pending: 'Checks running',
+  success: 'Checks passed',
+  failure: 'Checks failed',
+  none: 'No checks',
+};
 
 export interface RunEvent {
   id: number;
@@ -108,7 +153,9 @@ export const STATE_LABEL: Record<AgentState, string> = {
 
 export const RUN_LABEL: Record<RunStatus, string> = {
   running: 'Running',
+  reviewing: 'Reviewer agent reviewing',
   in_review: 'Ready for review',
+  done: 'Done',
   blocked: 'Blocked',
   failed: 'Failed',
   stopped: 'Stopped',

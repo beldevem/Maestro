@@ -188,7 +188,41 @@ export async function buildServer(d: ServerDeps): Promise<FastifyInstance> {
   app.get<{ Params: { id: string } }>('/api/runs/:id', async (req) => {
     const run = d.store.getRun(req.params.id);
     if (!run) throw Object.assign(new Error('Run not found.'), { statusCode: 404 });
-    return { ...run, active: d.orchestrator.isActive(run.id), events: d.store.listEvents(run.id) };
+    return { ...run, active: d.orchestrator.isActive(run.id), events: d.store.listEvents(run.id), reviews: d.store.listReviews(run.id) };
+  });
+  app.post<{ Params: { id: string } }>('/api/runs/:id/reviews', async (req) => {
+    const body = z
+      .object({
+        verdict: z.enum(['approve', 'changes_requested']),
+        summary: z.string().default(''),
+        comments: z.array(z.object({ file: z.string().nullable().default(null), line: z.number().int().positive().nullable().default(null), body: z.string().min(1) })).default([]),
+      })
+      .parse(req.body);
+    if (body.verdict === 'changes_requested' && !body.summary.trim() && !body.comments.length) throw new Error('Say what to change.');
+    return d.orchestrator.humanReview(req.params.id, body);
+  });
+
+  // Pull requests (and local branches) waiting for or going through review
+  app.get('/api/pull-requests', async () => {
+    const projects = new Map(d.store.listProjects().map((p) => [p.id, p.name]));
+    return d.store
+      .listRuns()
+      .filter((r) => r.prUrl || ['reviewing', 'in_review'].includes(r.status) || (r.status === 'running' && r.reviewRounds > 0))
+      .map((r) => {
+        const reviews = d.store.listReviews(r.id);
+        const agentReview = reviews.filter((x) => x.source === 'agent').at(-1);
+        return {
+          ...r,
+          projectName: projects.get(r.projectId) ?? 'Removed project',
+          reviewerVerdict: agentReview?.verdict ?? null,
+          openComments: d.store.pendingFeedback(r.id).reduce((n, x) => n + Math.max(1, x.comments.length), 0),
+          reviewCount: reviews.length,
+        };
+      });
+  });
+  app.post('/api/pull-requests/poll', async () => {
+    await d.orchestrator.pollPullRequests();
+    return { ok: true };
   });
   app.get<{ Params: { id: string } }>('/api/runs/:id/diff', async (req) => {
     const run = d.store.getRun(req.params.id);
@@ -258,6 +292,7 @@ export async function buildServer(d: ServerDeps): Promise<FastifyInstance> {
         'model.worker': 'claude-sonnet-5-5',
         'model.assistant': 'claude-sonnet-5-5',
         'model.planner': 'claude-opus-5-5',
+        'model.reviewer': 'claude-opus-5-5',
         maxConcurrentRuns: '3',
         'budget.perRunUsd': '5',
         ...d.store.allSettings(),

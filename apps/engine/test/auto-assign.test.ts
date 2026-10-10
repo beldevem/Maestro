@@ -12,6 +12,8 @@ import type { Project } from '../src/types.js';
 const WORKFLOW = `base_branch: main
 pull_before_start: false
 quality_gates: []
+review:
+  enabled: false
 orchestration:
   auto_assign: true
   max_parallel: 3

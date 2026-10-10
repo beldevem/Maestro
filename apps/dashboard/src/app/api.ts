@@ -1,5 +1,5 @@
 import { Injectable } from '@angular/core';
-import type { Agent, BacklogDraft, BacklogItem, Project, Run, RunEvent, SecretInfo, Ticket, TicketStatus } from './models';
+import type { Agent, BacklogDraft, BacklogItem, Project, PullRequestRow, Review, ReviewComment, Run, RunEvent, SecretInfo, Ticket, TicketStatus } from './models';
 
 export class ApiError extends Error {
   constructor(message: string, readonly status: number, readonly reasons: string[] = []) {
@@ -44,7 +44,11 @@ export class Api {
   discardDraft = (id: string) => this.call<BacklogDraft>('POST', `/drafts/${id}/discard`, {});
 
   runs = (projectId?: string) => this.call<Run[]>('GET', `/runs${projectId ? `?projectId=${projectId}` : ''}`);
-  run = (id: string) => this.call<Run & { active: boolean; events: RunEvent[] }>('GET', `/runs/${id}`);
+  run = (id: string) => this.call<Run & { active: boolean; events: RunEvent[]; reviews: Review[] }>('GET', `/runs/${id}`);
+  review = (id: string, verdict: 'approve' | 'changes_requested', summary = '', comments: ReviewComment[] = []) =>
+    this.call<Review>('POST', `/runs/${id}/reviews`, { verdict, summary, comments });
+  pullRequests = () => this.call<PullRequestRow[]>('GET', '/pull-requests');
+  pollPullRequests = () => this.call('POST', '/pull-requests/poll', {});
   diff = (id: string) => this.call<{ base: string; diff: string }>('GET', `/runs/${id}/diff`);
   stopRun = (id: string) => this.call('POST', `/runs/${id}/stop`, {});
   removeWorktree = (id: string) => this.call('DELETE', `/runs/${id}/worktree`);

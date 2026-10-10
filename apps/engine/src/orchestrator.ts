@@ -1,15 +1,16 @@
 import { existsSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { codeHostFor } from './adapters/codehost/index.js';
+import { codeHostFor, type CodeHostAdapter } from './adapters/codehost/index.js';
 import { pmFor } from './adapters/pm/index.js';
 import type { CodingAgent } from './agents/coding-agent.js';
-import { fixPrompt, pullRequestBody, ticketPrompt, workerSystemPrompt } from './agents/prompts.js';
+import { fixPrompt, pullRequestBody, reviewFixPrompt, ticketPrompt, workerSystemPrompt } from './agents/prompts.js';
+import { runReviewer } from './agents/reviewer.js';
 import type { Store } from './db.js';
 import { bus } from './events.js';
-import { runGates } from './gates.js';
+import { runGates, type GateResult } from './gates.js';
 import { git } from './proc.js';
 import type { SecretStore } from './secrets.js';
-import type { Agent, AgentState, Project, Run, RunEventKind, Ticket } from './types.js';
+import type { Agent, AgentState, Project, Review, ReviewComment, Run, RunEventKind, Ticket } from './types.js';
 import { blockedBy, branchName, checkReady, commitMessage, parseWorkflow, ticketArea, type Workflow } from './workflow.js';
 
 export interface OrchestratorDeps {
@@ -18,6 +19,8 @@ export interface OrchestratorDeps {
   agent: CodingAgent;
   reposDir: string;
   worktreesDir: string;
+  /** Override the code host, for tests. */
+  codeHostFor?: (project: Project) => CodeHostAdapter;
 }
 
 export class NotReadyError extends Error {
@@ -28,9 +31,24 @@ export class NotReadyError extends Error {
 
 const BASE_TOOLS = ['Read', 'Write', 'Edit', 'MultiEdit', 'Glob', 'Grep', 'TodoWrite', 'Bash(git status:*)', 'Bash(git diff:*)', 'Bash(ls:*)'];
 
+interface RunCtx {
+  runId: string;
+  project: Project;
+  wf: Workflow;
+  ticket: Ticket;
+  agent: Agent;
+  worktree: string;
+  repoPath: string;
+  codeHost: CodeHostAdapter;
+  pm: ReturnType<typeof pmFor>;
+  signal: AbortSignal;
+  env: Record<string, string>;
+}
+
 export class Orchestrator {
   private readonly active = new Map<string, AbortController>();
   private ticking: Promise<Run[]> | null = null;
+  private polling = false;
   private tickAgain = false;
 
   constructor(private readonly d: OrchestratorDeps) {}
@@ -66,7 +84,7 @@ export class Orchestrator {
     if (!agent) throw new Error('No worker agent is available. Add one on the Agents screen or wait for one to finish.');
     if (agent.state !== 'available') throw new Error(`${agent.name} is ${agent.state.replace('_', ' ')}.`);
 
-    const codeHost = codeHostFor(project, this.d.secrets, this.d.reposDir);
+    const codeHost = this.host(project);
     const repoPath = await codeHost.ensureRepo(project);
     if (wf.pull_before_start) await codeHost.syncBase(repoPath, wf.base_branch);
     const baseRef = await this.resolveBase(repoPath, wf.base_branch);
@@ -81,19 +99,14 @@ export class Orchestrator {
     });
     const worktree = join(dir, run.id);
     await git(repoPath, ['worktree', 'add', '-b', branch, worktree, baseRef]);
-    store.db.prepare('UPDATE runs SET worktree = ? WHERE id = ?').run(worktree, run.id);
-    run.worktree = worktree;
+    Object.assign(run, store.updateRun(run.id, { worktree, baseRef }));
 
-    const controller = new AbortController();
-    this.active.set(run.id, controller);
     this.publishRun(run);
     this.setAgent(agent.id, 'working', run.id, `On ${ticket.key}`);
     this.log(run.id, 'info', `${agent.name} picked up ${ticket.key} on branch ${branch} from ${baseRef}.`);
-
-    void this.work({ project, wf, ticket, agent, run, repoPath, codeHost, pm, signal: controller.signal }).finally(() => {
-      this.active.delete(run.id);
-      void this.tick();
-    });
+    this.launch(run.id, (signal) =>
+      this.work({ runId: run.id, project, wf, ticket, agent, worktree, repoPath, codeHost, pm, signal, env: this.agentEnv() }),
+    );
     return run;
   }
 
@@ -121,6 +134,13 @@ export class Orchestrator {
           projects = this.d.store.listProjects();
         } catch (e) {
           console.error(`Auto-assign could not list projects: ${e instanceof Error ? e.message : String(e)}`);
+        }
+        for (const run of this.d.store.listRuns().filter((r) => r.status === 'in_review')) {
+          try {
+            await this.addressPending(run.id);
+          } catch (e) {
+            console.error(`Could not hand feedback on ${run.ticketKey} to a worker: ${e instanceof Error ? e.message : String(e)}`);
+          }
         }
         for (const project of projects) {
           try {
@@ -184,121 +204,357 @@ export class Orchestrator {
     return this.active.has(runId);
   }
 
-  private async work(ctx: {
-    project: Project;
-    wf: Workflow;
-    ticket: Ticket;
-    agent: Agent;
-    run: Run;
-    repoPath: string;
-    codeHost: ReturnType<typeof codeHostFor>;
-    pm: ReturnType<typeof pmFor>;
-    signal: AbortSignal;
-  }): Promise<void> {
-    const { project, wf, ticket, agent, run, codeHost, pm, signal } = ctx;
+  /** Runs `fn` as the run's background work, so it counts toward the limit and can be stopped. */
+  private launch(runId: string, fn: (signal: AbortSignal) => Promise<void>): void {
+    const controller = new AbortController();
+    this.active.set(runId, controller);
+    void fn(controller.signal).finally(() => {
+      this.active.delete(runId);
+      void this.tick();
+    });
+  }
+
+  private async work(ctx: RunCtx): Promise<void> {
+    const { project, wf, ticket, codeHost, pm } = ctx;
     const { store } = this.d;
-    let cost = 0;
+    try {
+      await pm.moveTicket(ticket.key, 'in_progress').catch((e) => this.log(ctx.runId, 'error', `Could not move the ticket: ${e.message}`));
+      const done = await this.implement(ctx, ticketPrompt(ticket), false);
+      if (!done) return;
+
+      if (!(await git(ctx.worktree, ['status', '--porcelain']))) {
+        this.block(ctx, 'The agent finished without changing any files.', `Blocked on ${ticket.key}: no changes`);
+        return;
+      }
+      await this.commit(ctx, commitMessage(wf, ticket));
+
+      const run = this.run(ctx);
+      await codeHost.pushBranch(ctx.worktree, run.branch);
+      const pr = await codeHost.openPullRequest(project, {
+        branch: run.branch,
+        base: wf.base_branch,
+        title: `${ticket.key}: ${ticket.title}`,
+        body: pullRequestBody(ticket, done.summary, done.gates, wf),
+        draft: wf.pull_request.draft,
+      });
+      store.updateRun(ctx.runId, { prUrl: pr.url, prNumber: pr.number });
+      this.log(ctx.runId, 'info', pr.url ? `Opened pull request ${pr.url}` : `Branch ${run.branch} is ready for review in Maestro.`);
+
+      await pm.moveTicket(ticket.key, 'in_review').catch((e) => this.log(ctx.runId, 'error', `Could not move the ticket: ${e.message}`));
+      await pm.comment(ticket.key, `Maestro: ${pr.url ? `pull request ${pr.url}` : `branch ${run.branch}`} is ready for review.`).catch(() => undefined);
+      await this.reviewLoop(ctx);
+    } catch (e) {
+      this.fail(ctx, e);
+    }
+  }
+
+  /**
+   * Has the worker carry out `prompt`, then runs the quality gates and asks for fixes until they pass.
+   * Returns null when the run was blocked because the gates kept failing.
+   */
+  private async implement(ctx: RunCtx, firstPrompt: string, addressing: boolean): Promise<{ summary: string; gates: GateResult[] } | null> {
+    const { project, wf, ticket, agent, signal } = ctx;
+    const { store } = this.d;
     const tools = [
       ...BASE_TOOLS,
       ...wf.quality_gates.map((g) => `Bash(${g.run}:*)`),
       ...wf.allowed_commands.map((c) => `Bash(${c}:*)`),
     ];
-    const anthropicKey = this.d.secrets.get('ANTHROPIC_API_KEY');
-    const env: Record<string, string> = anthropicKey ? { ANTHROPIC_API_KEY: anthropicKey } : {};
+    let prompt = firstPrompt;
+    let tries = 0;
+    let summary = '';
 
-    const finish = (status: Run['status'], agentState: AgentState, extra: Partial<Run> = {}, note = '') => {
-      const updated = store.updateRun(run.id, { status, costUsd: cost, endedAt: new Date().toISOString(), ...extra });
-      if (updated) this.publishRun(updated);
-      this.setAgent(agent.id, agentState, agentState === 'blocked' ? run.id : null, note);
-    };
+    for (;;) {
+      const what = addressing ? 'Addressing review on' : tries === 0 ? 'On' : 'Fixing';
+      this.setAgent(agent.id, addressing ? 'addressing_review' : 'working', ctx.runId, `${what} ${ticket.key}${tries ? `, try ${tries}` : ''}`);
+      const outcome = await this.d.agent.run({
+        cwd: ctx.worktree,
+        prompt,
+        systemPrompt: workerSystemPrompt(project, wf),
+        model: this.workerModel(agent),
+        allowedTools: tools,
+        resume: this.run(ctx).sessionId ?? undefined,
+        env: ctx.env,
+        signal,
+        maxBudgetUsd: Number(store.getSetting('budget.perRunUsd') ?? 0) || undefined,
+        onMessage: (m) => this.log(ctx.runId, m.kind === 'tool' ? 'tool' : 'agent', m.text),
+      });
+      this.addCost(ctx, outcome.costUsd);
+      if (signal.aborted) throw new Error('aborted');
+      if (!outcome.ok) throw new Error(outcome.error ?? 'The agent stopped without finishing.');
+      if (outcome.sessionId) store.updateRun(ctx.runId, { sessionId: outcome.sessionId });
+      summary = outcome.text || summary;
 
-    try {
-      await pm.moveTicket(ticket.key, 'in_progress').catch((e) => this.log(run.id, 'error', `Could not move the ticket: ${e.message}`));
+      this.setAgent(agent.id, 'running_checks', ctx.runId, `Checking ${ticket.key}`);
+      this.log(ctx.runId, 'info', 'Running quality gates.');
+      const gates = await runGates(wf, ctx.worktree, (g) =>
+        this.log(ctx.runId, 'gate', `${g.passed ? 'PASS' : 'FAIL'} ${g.name} (${Math.round(g.durationMs / 1000)}s): ${g.command}${g.passed ? '' : `\n${g.output}`}`),
+        signal,
+      );
+      if (signal.aborted) throw new Error('aborted');
+      if (gates.passed) return { summary, gates: gates.results };
 
-      let session: string | undefined;
-      let summary = '';
-      let prompt = ticketPrompt(ticket);
-      let attempt = 0;
-      let gateResults: Awaited<ReturnType<typeof runGates>>['results'] = [];
-
-      for (;;) {
-        this.setAgent(agent.id, attempt === 0 ? 'working' : 'working', run.id, attempt === 0 ? `On ${ticket.key}` : `Fixing ${ticket.key}, try ${attempt}`);
-        const outcome = await this.d.agent.run({
-          cwd: run.worktree,
-          prompt,
-          systemPrompt: workerSystemPrompt(project, wf),
-          model: this.workerModel(agent),
-          allowedTools: tools,
-          resume: session,
-          env,
-          signal,
-          maxBudgetUsd: Number(store.getSetting('budget.perRunUsd') ?? 0) || undefined,
-          onMessage: (m) => this.log(run.id, m.kind === 'tool' ? 'tool' : 'agent', m.text),
-        });
-        cost += outcome.costUsd;
-        store.updateRun(run.id, { costUsd: cost });
-        if (signal.aborted) throw new Error('aborted');
-        if (!outcome.ok) throw new Error(outcome.error ?? 'The agent stopped without finishing.');
-        session = outcome.sessionId ?? session;
-        summary = outcome.text || summary;
-
-        this.setAgent(agent.id, 'running_checks', run.id, `Checking ${ticket.key}`);
-        this.log(run.id, 'info', 'Running quality gates.');
-        const gates = await runGates(wf, run.worktree, (g) =>
-          this.log(run.id, 'gate', `${g.passed ? 'PASS' : 'FAIL'} ${g.name} (${Math.round(g.durationMs / 1000)}s): ${g.command}${g.passed ? '' : `\n${g.output}`}`),
-          signal,
-        );
-        gateResults = gates.results;
-        if (signal.aborted) throw new Error('aborted');
-        if (gates.passed) break;
-
-        attempt += 1;
-        store.updateRun(run.id, { attempts: attempt });
-        const failed = gates.results.at(-1)!;
-        if (attempt > wf.max_fix_attempts) {
-          const msg = `"${failed.name}" still fails after ${wf.max_fix_attempts} fix attempts.`;
-          this.log(run.id, 'error', msg);
-          await pm.comment(ticket.key, `Maestro: ${msg} The branch ${run.branch} has the work so far.`).catch(() => undefined);
-          finish('blocked', 'blocked', { error: msg }, `Blocked on ${ticket.key}: ${failed.name} fails`);
-          return;
-        }
-        prompt = fixPrompt(failed, attempt, wf.max_fix_attempts);
+      tries += 1;
+      store.updateRun(ctx.runId, { attempts: this.run(ctx).attempts + 1 });
+      const failed = gates.results.at(-1)!;
+      if (tries > wf.max_fix_attempts) {
+        this.block(ctx, `"${failed.name}" still fails after ${wf.max_fix_attempts} fix attempts.`, `Blocked on ${ticket.key}: ${failed.name} fails`);
+        return null;
       }
+      prompt = fixPrompt(failed, tries, wf.max_fix_attempts);
+    }
+  }
 
-      const status = await git(run.worktree, ['status', '--porcelain']);
-      if (!status) {
-        const msg = 'The agent finished without changing any files.';
-        this.log(run.id, 'error', msg);
-        finish('blocked', 'blocked', { error: msg }, `Blocked on ${ticket.key}: no changes`);
+  private async commit(ctx: RunCtx, message: string): Promise<void> {
+    await git(ctx.worktree, ['add', '-A']);
+    const identity = (await git(ctx.worktree, ['config', 'user.email']).catch(() => ''))
+      ? []
+      : ['-c', 'user.name=Maestro', '-c', 'user.email=maestro@localhost'];
+    await git(ctx.worktree, [...identity, 'commit', '-m', message]);
+    this.log(ctx.runId, 'command', `Committed: ${message}`);
+  }
+
+  /** The reviewer agent reviews; on changes the worker fixes and it reviews again, up to review.max_rounds. */
+  private async reviewLoop(ctx: RunCtx): Promise<void> {
+    const { project, wf, ticket, agent, codeHost, signal } = ctx;
+    const { store } = this.d;
+    if (!wf.review.enabled) return this.toInReview(ctx);
+
+    for (let round = 1; ; round++) {
+      this.publishRun(store.updateRun(ctx.runId, { status: 'reviewing' })!);
+      this.setAgent(agent.id, 'waiting_review', ctx.runId, `Waiting for review of ${ticket.key}`);
+      this.log(ctx.runId, 'info', 'The reviewer agent is reviewing the change.');
+
+      let result: Awaited<ReturnType<typeof runReviewer>>;
+      try {
+        result = await runReviewer(
+          this.d.agent,
+          {
+            cwd: ctx.worktree, model: store.getSetting('model.reviewer') || 'claude-opus-5-5', env: ctx.env, signal,
+            onMessage: (m) => m.kind === 'agent' && this.log(ctx.runId, 'agent', `Reviewer: ${m.text}`),
+          },
+          project, wf, ticket, this.run(ctx).baseRef ?? wf.base_branch,
+        );
+      } catch (e) {
+        if (signal.aborted) throw e;
+        this.addCost(ctx, (e as { costUsd?: number }).costUsd ?? 0);
+        this.log(ctx.runId, 'error', `The reviewer agent failed, so this waits for your review: ${(e as Error).message}`);
+        return this.toInReview(ctx);
+      }
+      this.addCost(ctx, result.costUsd);
+      const review = store.addReview({
+        runId: ctx.runId, source: 'agent', verdict: result.verdict, summary: result.summary, comments: result.comments,
+        costUsd: result.costUsd, addressed: result.verdict === 'approve',
+      });
+      this.publishReview(review);
+      this.log(ctx.runId, 'info', `Reviewer: ${result.verdict === 'approve' ? 'approved' : `requested ${result.comments.length || ''} changes`.replace('  ', ' ')}. ${result.summary}`);
+      await this.postReview(ctx, review);
+
+      if (result.verdict === 'approve') return this.toInReview(ctx);
+      store.updateRun(ctx.runId, { reviewRounds: this.run(ctx).reviewRounds + 1 });
+      if (round > wf.review.max_rounds) {
+        this.block(ctx, `The reviewer still requests changes after ${wf.review.max_rounds} review rounds.`, `Blocked on ${ticket.key}: review not passing`);
         return;
       }
-
-      await git(run.worktree, ['add', '-A']);
-      const identity = (await git(run.worktree, ['config', 'user.email']).catch(() => ''))
-        ? []
-        : ['-c', 'user.name=Maestro', '-c', 'user.email=maestro@localhost'];
-      await git(run.worktree, [...identity, 'commit', '-m', commitMessage(wf, ticket)]);
-      this.log(run.id, 'command', `Committed: ${commitMessage(wf, ticket)}`);
-
-      await codeHost.pushBranch(run.worktree, run.branch);
-      const pr = await codeHost.openPullRequest(project, {
-        branch: run.branch,
-        base: wf.base_branch,
-        title: `${ticket.key}: ${ticket.title}`,
-        body: pullRequestBody(ticket, summary, gateResults, wf),
-        draft: wf.pull_request.draft,
-      });
-      this.log(run.id, 'info', pr.url ? `Opened pull request ${pr.url}` : `Branch ${run.branch} is ready for review in Maestro.`);
-
-      await pm.moveTicket(ticket.key, 'in_review').catch((e) => this.log(run.id, 'error', `Could not move the ticket: ${e.message}`));
-      await pm.comment(ticket.key, `Maestro: ${pr.url ? `pull request ${pr.url}` : `branch ${run.branch}`} is ready for review.`).catch(() => undefined);
-      finish('in_review', 'available', { prUrl: pr.url });
-    } catch (e) {
-      const aborted = signal.aborted;
-      const msg = aborted ? 'Stopped by you.' : e instanceof Error ? e.message : String(e);
-      this.log(run.id, 'error', msg);
-      finish(aborted ? 'stopped' : 'failed', 'available', { error: msg });
+      if (!(await this.addressFeedback(ctx, [review]))) return;
     }
+  }
+
+  /** The worker fixes the feedback in the same worktree and session, then commits and pushes to the same branch. */
+  private async addressFeedback(ctx: RunCtx, feedback: Review[]): Promise<boolean> {
+    const { store } = this.d;
+    this.publishRun(store.updateRun(ctx.runId, { status: 'running', endedAt: null })!);
+    const done = await this.implement(ctx, reviewFixPrompt(feedback), true);
+    if (!done) return false;
+    store.markReviewsAddressed(feedback.map((f) => f.id));
+    if (await git(ctx.worktree, ['status', '--porcelain'])) {
+      await this.commit(ctx, ctx.wf.commit_convention === 'conventional'
+        ? `fix: address review feedback [${ctx.ticket.key}]`
+        : `Address review feedback [${ctx.ticket.key}]`);
+      await ctx.codeHost.pushBranch(ctx.worktree, this.run(ctx).branch);
+    } else {
+      this.log(ctx.runId, 'info', 'The worker changed no files for this feedback; see its reply above.');
+    }
+    if (done.summary) this.log(ctx.runId, 'info', `Worker on the feedback: ${done.summary}`);
+    return true;
+  }
+
+  private async postReview(ctx: RunCtx, review: Review): Promise<void> {
+    const prNumber = this.run(ctx).prNumber;
+    if (!prNumber || !ctx.codeHost.postReview) return;
+    try {
+      const commitSha = await git(ctx.worktree, ['rev-parse', 'HEAD']);
+      const posted = await ctx.codeHost.postReview(ctx.project, prNumber, { verdict: review.verdict, summary: review.summary, comments: review.comments, commitSha });
+      this.log(ctx.runId, 'info', `Posted the review on the pull request.${posted.note ? ` ${posted.note}` : ''}`);
+    } catch (e) {
+      this.log(ctx.runId, 'error', `Could not post the review on the pull request: ${(e as Error).message}`);
+    }
+  }
+
+  /** Waiting for you (or the PR). The worker is free for other tickets meanwhile. */
+  private toInReview(ctx: RunCtx): void {
+    this.publishRun(this.d.store.updateRun(ctx.runId, { status: 'in_review', endedAt: new Date().toISOString() })!);
+    this.setAgent(ctx.agent.id, 'available', null, '');
+  }
+
+  private block(ctx: RunCtx, msg: string, note: string): void {
+    this.log(ctx.runId, 'error', msg);
+    void ctx.pm.comment(ctx.ticket.key, `Maestro: ${msg} The branch ${this.run(ctx).branch} has the work so far.`).catch(() => undefined);
+    this.publishRun(this.d.store.updateRun(ctx.runId, { status: 'blocked', error: msg, endedAt: new Date().toISOString() })!);
+    this.setAgent(ctx.agent.id, 'blocked', ctx.runId, note);
+  }
+
+  private fail(ctx: RunCtx, e: unknown): void {
+    const aborted = ctx.signal.aborted;
+    const msg = aborted ? 'Stopped by you.' : e instanceof Error ? e.message : String(e);
+    this.log(ctx.runId, 'error', msg);
+    this.publishRun(this.d.store.updateRun(ctx.runId, { status: aborted ? 'stopped' : 'failed', error: msg, endedAt: new Date().toISOString() })!);
+    this.setAgent(ctx.agent.id, 'available', null, '');
+  }
+
+  private run(ctx: RunCtx): Run {
+    return this.d.store.getRun(ctx.runId)!;
+  }
+
+  private addCost(ctx: RunCtx, usd: number): void {
+    if (usd) this.d.store.updateRun(ctx.runId, { costUsd: this.run(ctx).costUsd + usd });
+  }
+
+  /** Builds what a run needs from the stored run, for work that resumes after the run first went to review. */
+  private async contextFor(run: Run, agent: Agent, signal: AbortSignal): Promise<RunCtx> {
+    const { store } = this.d;
+    const project = store.getProject(run.projectId);
+    if (!project) throw new Error('Project not found.');
+    const wf = parseWorkflow(project.workflowYaml);
+    const pm = pmFor(project, store, this.d.secrets);
+    const ticket = (await pm.getTicket(run.ticketKey).catch(() => undefined)) ?? {
+      key: run.ticketKey, title: run.ticketTitle, description: '', acceptanceCriteria: '', status: 'in_review' as const, labels: [],
+    };
+    const codeHost = this.host(project);
+    const repoPath = await codeHost.ensureRepo(project);
+    if (!existsSync(run.worktree)) {
+      await git(repoPath, ['worktree', 'prune']);
+      await git(repoPath, ['worktree', 'add', run.worktree, run.branch]);
+    }
+    return { runId: run.id, project, wf, ticket, agent, worktree: run.worktree, repoPath, codeHost, pm, signal, env: this.agentEnv() };
+  }
+
+  private host(project: Project): CodeHostAdapter {
+    return this.d.codeHostFor?.(project) ?? codeHostFor(project, this.d.secrets, this.d.reposDir);
+  }
+
+  private agentEnv(): Record<string, string> {
+    const key = this.d.secrets.get('ANTHROPIC_API_KEY');
+    return key ? { ANTHROPIC_API_KEY: key } : {};
+  }
+
+  /** Hands feedback from you or the PR to a worker: the run's own worker if it is free, otherwise any free one. */
+  async addressPending(runId: string): Promise<boolean> {
+    const { store } = this.d;
+    const run = store.getRun(runId);
+    if (!run || run.status !== 'in_review' || this.active.has(runId)) return false;
+    const pending = store.pendingFeedback(runId);
+    if (!pending.length || this.active.size >= this.maxConcurrent()) return false;
+    const workers = store.listAgents().filter((a) => a.role === 'worker' && a.state === 'available');
+    const agent = workers.find((a) => a.id === run.agentId) ?? workers[0];
+    if (!agent) return false;
+
+    if (agent.id !== run.agentId) store.updateRun(runId, { agentId: agent.id });
+    this.setAgent(agent.id, 'addressing_review', runId, `Addressing review on ${run.ticketKey}`);
+    this.launch(runId, async (signal) => {
+      let ctx: RunCtx | undefined;
+      try {
+        ctx = await this.contextFor(run, agent, signal);
+        const who = [...new Set(pending.map((p) => p.author ?? (p.source === 'human' ? 'you' : 'a reviewer')))].join(', ');
+        this.log(runId, 'info', `${agent.name} is addressing feedback from ${who}.`);
+        if (await this.addressFeedback(ctx, pending)) await this.reviewLoop(ctx);
+      } catch (e) {
+        if (ctx) this.fail(ctx, e);
+        else {
+          this.log(runId, 'error', (e as Error).message);
+          this.setAgent(agent.id, 'available', null, '');
+        }
+      }
+    });
+    return true;
+  }
+
+  /** Approved by you or merged: the ticket is done and the worktree goes (the branch stays). */
+  async complete(runId: string, how: 'approved' | 'merged'): Promise<Run> {
+    const { store } = this.d;
+    const run = store.getRun(runId);
+    if (!run) throw new Error('Run not found.');
+    if (this.active.has(runId)) throw new Error('This run is still working; stop it first.');
+    if (!['in_review', 'blocked'].includes(run.status)) throw new Error(`A run that is ${run.status.replace('_', ' ')} can't be completed.`);
+    const project = store.getProject(run.projectId);
+    if (!project) throw new Error('Project not found.');
+    const pm = pmFor(project, store, this.d.secrets);
+    await pm.moveTicket(run.ticketKey, 'done').catch((e) => this.log(runId, 'error', `Could not move the ticket: ${e.message}`));
+    await pm.comment(run.ticketKey, `Maestro: ${how === 'merged' ? 'the pull request was merged' : 'approved'}; done.`).catch(() => undefined);
+    store.markReviewsAddressed(store.pendingFeedback(runId).map((r) => r.id));
+    const updated = store.updateRun(runId, { status: 'done', error: null, endedAt: new Date().toISOString() })!;
+    this.publishRun(updated);
+    const agent = store.getAgent(run.agentId);
+    if (agent?.currentRunId === runId) this.setAgent(agent.id, 'available', null, '');
+    this.log(runId, 'info', how === 'merged' ? 'The pull request was merged. Ticket done.' : 'Approved by you. Ticket done.');
+    await this.cleanup(updated, project).catch(() => undefined);
+    return updated;
+  }
+
+  /** Your review in Maestro: approve completes the run; changes requested go to a worker. */
+  async humanReview(runId: string, input: { verdict: 'approve' | 'changes_requested'; summary: string; comments: ReviewComment[] }): Promise<Review> {
+    const { store } = this.d;
+    const run = store.getRun(runId);
+    if (!run) throw new Error('Run not found.');
+    if (run.status !== 'in_review') throw new Error('Only a run that is waiting for review can be reviewed.');
+    const review = store.addReview({ runId, source: 'human', ...input, author: 'you', addressed: input.verdict === 'approve' });
+    this.publishReview(review);
+    if (input.verdict === 'approve') await this.complete(runId, 'approved');
+    else void this.tick();
+    return review;
+  }
+
+  /** Checks open PRs for merges, closes, CI status and new feedback. Never throws. */
+  async pollPullRequests(): Promise<void> {
+    if (this.polling) return;
+    this.polling = true;
+    const { store } = this.d;
+    try {
+      for (const run of store.listRuns().filter((r) => r.status === 'in_review' && r.prNumber)) {
+        try {
+          const project = store.getProject(run.projectId);
+          if (!project || !parseWorkflow(project.workflowYaml).review.poll_pull_requests) continue;
+          const codeHost = this.host(project);
+          if (!codeHost.pullRequestStatus) continue;
+          const status = await codeHost.pullRequestStatus(project, run.prNumber!);
+          if (status.checks !== run.checks) this.publishRun(store.updateRun(run.id, { checks: status.checks })!);
+          if (status.state === 'merged') {
+            await this.complete(run.id, 'merged');
+            continue;
+          }
+          if (status.state === 'closed') {
+            this.log(run.id, 'info', 'The pull request was closed without merging.');
+            this.publishRun(store.updateRun(run.id, { status: 'stopped', error: 'Pull request closed without merging.' })!);
+            continue;
+          }
+          for (const f of status.feedback) {
+            if (store.hasExternalReview(run.id, f.externalId)) continue;
+            const review = store.addReview({
+              runId: run.id, source: 'github', verdict: f.verdict, author: f.author, externalId: f.externalId,
+              summary: f.file ? '' : f.body, comments: f.file ? [{ file: f.file, line: f.line, body: f.body }] : [],
+              addressed: f.verdict !== 'changes_requested',
+            });
+            this.publishReview(review);
+            this.log(run.id, 'info', `New ${f.verdict === 'changes_requested' ? 'change request' : 'review'} from ${f.author} on the pull request.`);
+          }
+        } catch (e) {
+          console.error(`Polling the pull request of ${run.ticketKey} failed: ${e instanceof Error ? e.message : String(e)}`);
+        }
+      }
+    } finally {
+      this.polling = false;
+    }
+    await this.tick();
   }
 
   private async resolveBase(repoPath: string, base: string): Promise<string> {
@@ -321,6 +577,10 @@ export class Orchestrator {
     bus.publish({ type: 'run', run: this.d.store.getRun(run.id) ?? run });
   }
 
+  private publishReview(review: Review): void {
+    bus.publish({ type: 'review', review });
+  }
+
   private log(runId: string, kind: RunEventKind, message: string): void {
     bus.publish({ type: 'run_event', event: this.d.store.addEvent(runId, kind, message) });
   }
@@ -328,7 +588,7 @@ export class Orchestrator {
   /** Remove a finished run's worktree (the branch stays). */
   async cleanup(run: Run, project: Project): Promise<void> {
     if (this.active.has(run.id) || !existsSync(run.worktree)) return;
-    const repoPath = await codeHostFor(project, this.d.secrets, this.d.reposDir).ensureRepo(project);
+    const repoPath = await this.host(project).ensureRepo(project);
     await git(repoPath, ['worktree', 'remove', '--force', run.worktree]);
   }
 
@@ -337,8 +597,12 @@ export class Orchestrator {
     for (const run of this.d.store.listRuns().filter((r) => r.status === 'running')) {
       this.d.store.updateRun(run.id, { status: 'failed', error: 'Engine restarted during the run.', endedAt: new Date().toISOString() });
     }
+    for (const run of this.d.store.listRuns().filter((r) => r.status === 'reviewing')) {
+      this.d.store.updateRun(run.id, { status: 'in_review' });
+      this.log(run.id, 'info', 'The engine restarted during the review; this now waits for your review.');
+    }
     for (const a of this.d.store.listAgents()) {
-      if (['working', 'running_checks', 'addressing_review'].includes(a.state)) this.d.store.updateAgent(a.id, { state: 'available', currentRunId: null, note: '' });
+      if (['working', 'running_checks', 'addressing_review', 'waiting_review'].includes(a.state)) this.d.store.updateAgent(a.id, { state: 'available', currentRunId: null, note: '' });
     }
   }
 }

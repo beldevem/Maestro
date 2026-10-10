@@ -1,6 +1,6 @@
 import { DatabaseSync } from 'node:sqlite';
 import { randomUUID } from 'node:crypto';
-import type { Agent, BacklogDraft, BacklogItem, Project, Run, RunEvent, RunEventKind, Ticket } from './types.js';
+import type { Agent, BacklogDraft, BacklogItem, Project, Review, Run, RunEvent, RunEventKind, Ticket } from './types.js';
 import { DEFAULT_WORKFLOW_YAML } from './workflow.js';
 
 const SCHEMA = `
@@ -36,6 +36,12 @@ CREATE TABLE IF NOT EXISTS backlog_drafts (
   created_at TEXT NOT NULL, approved_at TEXT
 );
 CREATE INDEX IF NOT EXISTS backlog_drafts_project ON backlog_drafts(project_id);
+CREATE TABLE IF NOT EXISTS reviews (
+  id TEXT PRIMARY KEY, run_id TEXT NOT NULL, source TEXT NOT NULL, verdict TEXT NOT NULL, summary TEXT NOT NULL DEFAULT '',
+  comments TEXT NOT NULL DEFAULT '[]', author TEXT, external_id TEXT, addressed INTEGER NOT NULL DEFAULT 0,
+  cost_usd REAL NOT NULL DEFAULT 0, created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS reviews_run ON reviews(run_id);
 CREATE TABLE IF NOT EXISTS ticket_deps (
   project_id TEXT NOT NULL, ticket_key TEXT NOT NULL, depends_on_key TEXT NOT NULL,
   PRIMARY KEY (project_id, ticket_key, depends_on_key)
@@ -45,6 +51,11 @@ CREATE TABLE IF NOT EXISTS ticket_deps (
 /** Columns added after the first release, for databases created before them. */
 const COLUMNS: { table: string; column: string; ddl: string }[] = [
   { table: 'runs', column: 'area', ddl: 'ALTER TABLE runs ADD COLUMN area TEXT' },
+  { table: 'runs', column: 'session_id', ddl: 'ALTER TABLE runs ADD COLUMN session_id TEXT' },
+  { table: 'runs', column: 'base_ref', ddl: 'ALTER TABLE runs ADD COLUMN base_ref TEXT' },
+  { table: 'runs', column: 'pr_number', ddl: 'ALTER TABLE runs ADD COLUMN pr_number INTEGER' },
+  { table: 'runs', column: 'review_rounds', ddl: 'ALTER TABLE runs ADD COLUMN review_rounds INTEGER NOT NULL DEFAULT 0' },
+  { table: 'runs', column: 'checks', ddl: 'ALTER TABLE runs ADD COLUMN checks TEXT' },
 ];
 
 type Row = Record<string, any>;
@@ -132,7 +143,7 @@ export class Store {
   createRun(input: Pick<Run, 'projectId' | 'agentId' | 'ticketKey' | 'ticketTitle' | 'branch' | 'worktree'> & { area?: string | null }): Run {
     const r: Run = {
       ...input, area: input.area ?? null, id: randomUUID(), status: 'running', attempts: 0, costUsd: 0, prUrl: null, error: null,
-      startedAt: now(), endedAt: null,
+      sessionId: null, baseRef: null, prNumber: null, reviewRounds: 0, checks: null, startedAt: now(), endedAt: null,
     };
     this.db
       .prepare(
@@ -156,8 +167,13 @@ export class Store {
     const current = this.getRun(id);
     if (!current) return undefined;
     const r = { ...current, ...patch };
-    this.db.prepare('UPDATE runs SET status = ?, attempts = ?, cost_usd = ?, pr_url = ?, error = ?, ended_at = ? WHERE id = ?')
-      .run(r.status, r.attempts, r.costUsd, r.prUrl, r.error, r.endedAt, id);
+    this.db
+      .prepare(
+        `UPDATE runs SET agent_id = ?, status = ?, attempts = ?, cost_usd = ?, pr_url = ?, error = ?, ended_at = ?, worktree = ?, session_id = ?,
+         base_ref = ?, pr_number = ?, review_rounds = ?, checks = ? WHERE id = ?`,
+      )
+      .run(r.agentId, r.status, r.attempts, r.costUsd, r.prUrl, r.error, r.endedAt, r.worktree, r.sessionId, r.baseRef, r.prNumber,
+        r.reviewRounds, r.checks, id);
     return r;
   }
   addEvent(runId: string, kind: RunEventKind, message: string): RunEvent {
@@ -193,6 +209,32 @@ export class Store {
   }
   setManualTicketStatus(projectId: string, key: string, status: Ticket['status']): void {
     this.db.prepare('UPDATE manual_tickets SET status = ? WHERE project_id = ? AND key = ?').run(status, projectId, key);
+  }
+
+  // Reviews (from the reviewer agent, from you in Maestro, or polled from the code host)
+  addReview(input: Omit<Review, 'id' | 'createdAt' | 'addressed' | 'costUsd' | 'author' | 'externalId'> & Partial<Pick<Review, 'addressed' | 'costUsd' | 'author' | 'externalId'>>): Review {
+    const r: Review = { addressed: false, costUsd: 0, author: null, externalId: null, ...input, id: randomUUID(), createdAt: now() };
+    this.db
+      .prepare(
+        `INSERT INTO reviews (id, run_id, source, verdict, summary, comments, author, external_id, addressed, cost_usd, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(r.id, r.runId, r.source, r.verdict, r.summary, JSON.stringify(r.comments), r.author, r.externalId, r.addressed ? 1 : 0, r.costUsd, r.createdAt);
+    return r;
+  }
+  listReviews(runId: string): Review[] {
+    return (this.db.prepare('SELECT * FROM reviews WHERE run_id = ? ORDER BY created_at, rowid').all(runId) as Row[]).map(toReview);
+  }
+  hasExternalReview(runId: string, externalId: string): boolean {
+    return !!this.db.prepare('SELECT 1 FROM reviews WHERE run_id = ? AND external_id = ?').get(runId, externalId);
+  }
+  /** Feedback from you or the code host that no worker has dealt with yet. */
+  pendingFeedback(runId: string): Review[] {
+    return this.listReviews(runId).filter((r) => !r.addressed && r.source !== 'agent' && r.verdict === 'changes_requested');
+  }
+  markReviewsAddressed(ids: string[]): void {
+    const stmt = this.db.prepare('UPDATE reviews SET addressed = 1 WHERE id = ?');
+    for (const id of ids) stmt.run(id);
   }
 
   // Backlog drafts from the planner
@@ -262,7 +304,15 @@ function toRun(r: Row): Run {
   return {
     id: r.id, projectId: r.project_id, agentId: r.agent_id, ticketKey: r.ticket_key, ticketTitle: r.ticket_title,
     branch: r.branch, worktree: r.worktree, status: r.status, attempts: r.attempts, costUsd: r.cost_usd,
-    prUrl: r.pr_url ?? null, error: r.error ?? null, area: r.area ?? null, startedAt: r.started_at, endedAt: r.ended_at ?? null,
+    prUrl: r.pr_url ?? null, error: r.error ?? null, area: r.area ?? null, sessionId: r.session_id ?? null, baseRef: r.base_ref ?? null,
+    prNumber: r.pr_number ?? null, reviewRounds: r.review_rounds ?? 0, checks: r.checks ?? null,
+    startedAt: r.started_at, endedAt: r.ended_at ?? null,
+  };
+}
+function toReview(r: Row): Review {
+  return {
+    id: r.id, runId: r.run_id, source: r.source, verdict: r.verdict, summary: r.summary, comments: JSON.parse(r.comments),
+    author: r.author ?? null, externalId: r.external_id ?? null, addressed: !!r.addressed, costUsd: r.cost_usd, createdAt: r.created_at,
   };
 }
 function toDraft(r: Row): BacklogDraft {

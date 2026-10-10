@@ -1,6 +1,6 @@
 import { Injectable, inject, signal } from '@angular/core';
 import { Api } from './api';
-import type { Agent, Run, RunEvent } from './models';
+import type { Agent, Review, Run, RunEvent } from './models';
 
 /** Keeps agents and runs current from the engine's event stream. */
 @Injectable({ providedIn: 'root' })
@@ -10,6 +10,7 @@ export class Live {
   readonly runs = signal<Run[]>([]);
   readonly connected = signal(false);
   private readonly listeners = new Set<(e: RunEvent) => void>();
+  private readonly reviewListeners = new Set<(r: Review) => void>();
   private source?: EventSource;
 
   start(): void {
@@ -26,6 +27,7 @@ export class Live {
       if (e.type === 'agent') this.upsert(this.agents, e.agent as Agent);
       if (e.type === 'run') this.upsert(this.runs, e.run as Run, true);
       if (e.type === 'run_event') this.listeners.forEach((l) => l(e.event as RunEvent));
+      if (e.type === 'review') this.reviewListeners.forEach((l) => l(e.review as Review));
     };
   }
 
@@ -33,6 +35,11 @@ export class Live {
     const [agents, runs] = await Promise.all([this.api.agents(), this.api.runs()]);
     this.agents.set(agents);
     this.runs.set(runs);
+  }
+
+  onReview(fn: (r: Review) => void): () => void {
+    this.reviewListeners.add(fn);
+    return () => this.reviewListeners.delete(fn);
   }
 
   onRunEvent(fn: (e: RunEvent) => void): () => void {
