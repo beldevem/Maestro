@@ -57,6 +57,7 @@ h2 { font-size: 15px; margin: 0 0 8px; }
   .conn { margin: 0 0 0 auto; font-size: 0; }
   .conn::before { content: ''; display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
   .content { padding: 16px; }
+  .table { display: block; overflow-x: auto; white-space: nowrap; }
 }
 
 .page-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 16px; }
