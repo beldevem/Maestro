@@ -475,8 +475,12 @@ export async function buildServer(d: ServerDeps): Promise<FastifyInstance> {
   });
 
   // Live updates
+  // Same-origin only: no CORS header here, so other web pages can't read agent activity from this machine.
   app.get('/api/events', (req, reply) => {
-    reply.raw.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive', 'Access-Control-Allow-Origin': '*' });
+    reply.hijack();
+    reply.raw.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive' });
+    // Something must be sent for the browser to report the stream as open.
+    reply.raw.write(': connected\n\n');
     const send = (e: BusEvent) => reply.raw.write(`data: ${JSON.stringify(e)}\n\n`);
     const ping = setInterval(() => reply.raw.write(': ping\n\n'), 25_000);
     bus.on('event', send);
