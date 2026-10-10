@@ -261,25 +261,29 @@ export class Orchestrator {
       done.summary = this.recordLearnings(ctx, done.summary);
       await this.commit(ctx, commitMessage(wf, ticket));
       if (memoryEdited) store.deleteSetting(`memory.${project.id}`);
-
-      const run = this.run(ctx);
-      await codeHost.pushBranch(ctx.worktree, run.branch, project);
-      const pr = await codeHost.openPullRequest(project, {
-        branch: run.branch,
-        base: wf.base_branch,
-        title: `${ticket.key}: ${ticket.title}`,
-        body: pullRequestBody(ticket, done.summary, done.gates, wf),
-        draft: wf.pull_request.draft,
-      });
-      store.updateRun(ctx.runId, { prUrl: pr.url, prNumber: pr.number, readyAt: new Date().toISOString() });
-      this.log(ctx.runId, 'info', pr.url ? `Opened pull request ${pr.url}` : `Branch ${run.branch} is ready for review in Maestro.`);
-
-      await pm.moveTicket(ticket.key, 'in_review').catch((e) => this.log(ctx.runId, 'error', `Could not move the ticket: ${e.message}`));
-      await pm.comment(ticket.key, `Maestro: ${pr.url ? `pull request ${pr.url}` : `branch ${run.branch}`} is ready for review.`).catch(() => undefined);
+      await this.publish(ctx, done.summary, done.gates);
       await this.reviewLoop(ctx);
     } catch (e) {
       this.fail(ctx, e);
     }
+  }
+
+  /** Pushes the branch, opens the pull request (or leaves the branch for review in Maestro) and moves the ticket to review. */
+  private async publish(ctx: RunCtx, summary: string, gates: GateResult[]): Promise<void> {
+    const { project, wf, ticket, codeHost, pm } = ctx;
+    const run = this.run(ctx);
+    await codeHost.pushBranch(ctx.worktree, run.branch, project);
+    const pr = await codeHost.openPullRequest(project, {
+      branch: run.branch,
+      base: wf.base_branch,
+      title: `${ticket.key}: ${ticket.title}`,
+      body: pullRequestBody(ticket, summary, gates, wf),
+      draft: wf.pull_request.draft,
+    });
+    this.d.store.updateRun(ctx.runId, { prUrl: pr.url, prNumber: pr.number, readyAt: new Date().toISOString() });
+    this.log(ctx.runId, 'info', pr.url ? `Opened pull request ${pr.url}` : `Branch ${run.branch} is ready for review in Maestro.`);
+    await pm.moveTicket(ticket.key, 'in_review').catch((e) => this.log(ctx.runId, 'error', `Could not move the ticket: ${e.message}`));
+    await pm.comment(ticket.key, `Maestro: ${pr.url ? `pull request ${pr.url}` : `branch ${run.branch}`} is ready for review.`).catch(() => undefined);
   }
 
   /**
@@ -439,7 +443,15 @@ export class Orchestrator {
     if (!done) return false;
     done.summary = this.recordLearnings(ctx, done.summary);
     store.markReviewsAddressed(feedback.map((f) => f.id));
-    if (await git(ctx.worktree, ['status', '--porcelain', ...CHANGE_PATHS])) {
+    if (!this.run(ctx).readyAt) {
+      // Blocked before its first review: this is the ticket's first commit and the change still has to be published.
+      if (!(await this.hasChanges(ctx))) {
+        this.block(ctx, 'The worker still changed no files.', `Blocked on ${ctx.ticket.key}: no changes`);
+        return false;
+      }
+      await this.commit(ctx, commitMessage(ctx.wf, ctx.ticket));
+      await this.publish(ctx, done.summary, done.gates);
+    } else if (await git(ctx.worktree, ['status', '--porcelain', ...CHANGE_PATHS])) {
       await this.commit(ctx, ctx.wf.commit_convention === 'conventional'
         ? `fix: address review feedback [${ctx.ticket.key}]`
         : `Address review feedback [${ctx.ticket.key}]`);
@@ -619,11 +631,23 @@ export class Orchestrator {
     const { store } = this.d;
     const run = store.getRun(runId);
     if (!run) throw new Error('Run not found.');
-    if (run.status !== 'in_review') throw new Error('Only a run that is waiting for review can be reviewed.');
+    if (this.active.has(runId) || !['in_review', 'blocked'].includes(run.status)) {
+      throw new Error('Only a run that is waiting for review or blocked can be reviewed.');
+    }
     const review = store.addReview({ runId, source: 'human', ...input, author: 'you', addressed: input.verdict === 'approve' });
     this.publishReview(review);
-    if (input.verdict === 'approve') await this.complete(runId, 'approved');
-    else void this.tick();
+    if (input.verdict === 'approve') {
+      await this.complete(runId, 'approved');
+      return review;
+    }
+    if (run.status === 'blocked') {
+      // Your guidance unblocks it: the worker picks the run up again with your feedback.
+      this.publishRun(store.updateRun(runId, { status: 'in_review', error: null })!);
+      const agent = store.getAgent(run.agentId);
+      if (agent?.state === 'blocked' && agent.currentRunId === runId) this.setAgent(agent.id, 'available', null, '');
+      this.log(runId, 'info', 'You gave the worker guidance; it picks the run up again.');
+    }
+    void this.tick();
     return review;
   }
 

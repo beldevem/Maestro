@@ -36,16 +36,18 @@ import { CHECKS_LABEL, RUN_LABEL, VERDICT_LABEL, type Review, type Run, type Run
       </div>
       @if (diff()) { <pre class="diff">{{ diff() }}</pre> }
 
-      @if (r.status === 'in_review') {
+      @if (r.status === 'in_review' || r.status === 'blocked') {
         <form class="panel review-form" (ngSubmit)="requestChanges()">
-          <h2>Your review</h2>
-          @if (r.prNumber) {
+          <h2>{{ r.status === 'blocked' ? 'Help the worker' : 'Your review' }}</h2>
+          @if (r.status === 'blocked') {
+            <p class="hint">Say what to do differently; a worker picks the run up again in the same worktree and session. Raise the budget first if that is what stopped it.</p>
+          } @else if (r.prNumber) {
             <p class="hint">You can also review on the pull request: Maestro checks it every minute and hands change requests to a worker. Merging it finishes the ticket.</p>
           }
-          <label>What should change? <textarea [(ngModel)]="feedback" name="feedback" rows="4" placeholder="One point per line"></textarea></label>
+          <label>{{ r.status === 'blocked' ? 'Guidance' : 'What should change?' }} <textarea [(ngModel)]="feedback" name="feedback" rows="4" placeholder="One point per line"></textarea></label>
           <div class="row">
-            <button type="submit" [disabled]="!feedback.trim() || sending()">Request changes</button>
-            <button type="button" class="primary" (click)="approve()" [disabled]="sending()">{{ r.prNumber ? 'Mark done' : 'Approve and finish' }}</button>
+            <button type="submit" [disabled]="!feedback.trim() || sending()">{{ r.status === 'blocked' ? 'Send to the worker' : 'Request changes' }}</button>
+            <button type="button" [class.primary]="r.status !== 'blocked'" (click)="approve()" [disabled]="sending()">{{ r.prNumber || r.status === 'blocked' ? 'Mark done' : 'Approve and finish' }}</button>
           </div>
           @if (reviewError()) { <p class="error">{{ reviewError() }}</p> }
         </form>

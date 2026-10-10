@@ -173,6 +173,40 @@ describe('review loop', () => {
     await app.close();
   });
 
+  it('picks a blocked run up again with your guidance and publishes it once the gates pass', async () => {
+    // Gets the greeting wrong until you say how; then it is right.
+    const tasks: AgentTask[] = [];
+    const agent: CodingAgent = {
+      async run(task: AgentTask): Promise<AgentOutcome> {
+        tasks.push(task);
+        if (task.outputSchema) return { sessionId: 'r', text: '', costUsd: 0, ok: true, structured: approve };
+        writeFileSync(join(task.cwd, 'hello.txt'), task.prompt.includes('Spell it h-e-l-l-o') ? 'hello\n' : 'helo\n');
+        return { sessionId: 'worker-session', text: 'Tried.', costUsd: 0, ok: true };
+      },
+    };
+    const github = new FakeGitHub(repo);
+    const { orchestrator, project, worker, ticket } = setup(agent, { github });
+    const app = await buildServer({ store, secrets, agent, orchestrator, reposDir: join(home, 'repos') });
+    const run = await orchestrator.start(project.id, ticket.key);
+    await waitFor(() => settled(store.getRun(run.id)!.status));
+    expect(store.getRun(run.id)!.status).toBe('blocked');
+    expect(store.getRun(run.id)!.prNumber).toBeNull();
+    expect(store.getAgent(worker.id)!.state).toBe('blocked');
+
+    const res = await app.inject({ method: 'POST', url: `/api/runs/${run.id}/reviews`, payload: { verdict: 'changes_requested', summary: 'Spell it h-e-l-l-o.' } });
+    expect(res.statusCode).toBe(200);
+    await waitFor(() => store.getRun(run.id)!.status === 'in_review' && !!store.getRun(run.id)!.readyAt && !orchestrator.isActive(run.id));
+
+    const done = store.getRun(run.id)!;
+    expect(done.error).toBeNull();
+    expect(done.prNumber).toBe(7);
+    expect(await git(repo, ['log', '--format=%s', `main..${done.branch}`])).toBe('feat: say hello [DEM-1]');
+    expect(tasks.filter((t) => !t.outputSchema).at(-1)!.resume).toBe('worker-session');
+    expect(store.getAgent(worker.id)!.state).toBe('available');
+    expect(store.getManualTicket(project.id, ticket.key)!.status).toBe('in_review');
+    await app.close();
+  });
+
   it('posts reviews on the PR and follows it: checks, change requests and the merge', async () => {
     const agent = new ScriptedAgent([changes]);
     const github = new FakeGitHub(repo);
