@@ -17,6 +17,7 @@ import { bus, type BusEvent } from './events.js';
 import { NotReadyError, Orchestrator } from './orchestrator.js';
 import { git } from './proc.js';
 import { budgetState, dailyCap, startOfToday, usd } from './budget.js';
+import { DESIGN_DIR } from './adapters/design/index.js';
 import { readBaseMemory } from './memory.js';
 import { TEMPLATES, templateById, workflowFor } from './templates.js';
 import { computeMetrics } from './metrics.js';
@@ -340,11 +341,20 @@ export async function buildServer(d: ServerDeps): Promise<FastifyInstance> {
     if (!run || !existsSync(run.worktree)) throw Object.assign(new Error('The run has no worktree any more.'), { statusCode: 404 });
     const p = project(run.projectId);
     const base = parseWorkflow(p.workflowYaml).base_branch;
-    const committed = run.status === 'in_review';
-    const diff = committed
-      ? await git(run.worktree, ['show', '--stat', '--patch', '--format=%s%n', 'HEAD'])
-      : await git(run.worktree, ['diff', 'HEAD']);
-    return { base, diff };
+    // The whole change against where the run started: every commit (including review fixes) plus what isn't committed yet.
+    const from = run.baseRef ?? base;
+    const paths = ['--', '.', `:(exclude)${DESIGN_DIR}`];
+    const [commits, diff, untracked] = await Promise.all([
+      git(run.worktree, ['log', '--format=%h %s', `${from}..HEAD`]),
+      git(run.worktree, ['diff', '--stat', '--patch', from, ...paths]),
+      git(run.worktree, ['ls-files', '--others', '--exclude-standard', ...paths]),
+    ]);
+    const parts = [
+      commits && `Commits:\n${commits}`,
+      untracked && `New files not committed yet:\n${untracked}`,
+      diff,
+    ];
+    return { base, diff: parts.filter(Boolean).join('\n\n') };
   });
   app.post<{ Params: { id: string } }>('/api/runs/:id/stop', async (req) => ({ stopped: d.orchestrator.stop(req.params.id) }));
   app.delete<{ Params: { id: string } }>('/api/runs/:id/worktree', async (req) => {

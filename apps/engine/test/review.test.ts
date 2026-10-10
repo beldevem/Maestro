@@ -121,6 +121,14 @@ describe('review loop', () => {
     expect(agent.worker[1].resume).toBe('worker-session');
     expect(agent.worker[1].prompt).toContain('hello.txt:1: Greet someone by name.');
     expect(await git(repo, ['log', '--format=%s', `main..${done.branch}`])).toBe('fix: address review feedback [DEM-1]\nfeat: say hello [DEM-1]');
+    // The run's diff is the whole change, not just the last commit.
+    const app = await buildServer({ store, secrets, agent, orchestrator, reposDir: join(home, 'repos') });
+    const diff = (await app.inject({ method: 'GET', url: `/api/runs/${run.id}/diff` })).json().diff as string;
+    expect(diff).toContain('fix: address review feedback [DEM-1]');
+    expect(diff).toContain('feat: say hello [DEM-1]');
+    expect(diff).toContain('+hello');
+    expect(diff).toContain('+name line 2');
+    await app.close();
     const reviews = store.listReviews(run.id);
     expect(reviews.map((r) => [r.verdict, r.addressed])).toEqual([['changes_requested', true], ['approve', true]]);
     expect(store.getAgent(worker.id)!.state).toBe('available');
