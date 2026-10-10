@@ -1,3 +1,4 @@
+import { chmodSync, existsSync, writeFileSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 import { randomUUID } from 'node:crypto';
 import type { Agent, Alert, AlertKind, BacklogDraft, ChatActionStatus, ChatMessage, StoredChatAction, BacklogItem, Project, Review, Run, RunEvent, RunEventKind, SpendKind, Ticket } from './types.js';
@@ -83,6 +84,9 @@ export class Store {
   readonly db: DatabaseSync;
 
   constructor(file: string) {
+    // Project data is yours alone: the database starts as 600, and SQLite gives its -wal and -shm files the same mode.
+    if (!existsSync(file)) writeFileSync(file, '', { mode: 0o600 });
+    for (const f of [file, `${file}-wal`, `${file}-shm`]) if (existsSync(f)) chmodSync(f, 0o600);
     this.db = new DatabaseSync(file);
     this.db.exec('PRAGMA journal_mode = WAL;');
     this.db.exec(SCHEMA);
