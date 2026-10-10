@@ -4,7 +4,7 @@ import { FormsModule } from '@angular/forms';
 import { Router, RouterLink } from '@angular/router';
 import { Api, ApiError } from '../api';
 import { Live } from '../live';
-import { RUN_LABEL, STATUS_LABEL, type BacklogDraft, type Project, type Ticket, type TicketStatus } from '../models';
+import { RUN_LABEL, STATUS_LABEL, type BacklogDraft, type ChatAction, type ChatMessage, type Project, type Ticket, type TicketStatus } from '../models';
 import { BacklogDraftPanel } from './backlog-draft';
 import { ConnectorFields } from './connector-fields';
 
@@ -145,6 +145,24 @@ type Tab = 'board' | 'knowledge' | 'workflow' | 'runs' | 'chat' | 'connectors';
             }
             @for (m of messages(); track $index) {
               <div class="msg msg-{{ m.role }}">{{ m.content }}</div>
+              @for (a of m.actions ?? []; track a.id) {
+                <div class="action-card">
+                  <span>{{ a.summary }}</span>
+                  @switch (a.state) {
+                    @case ('running') { <span class="spinner"></span> }
+                    @case ('done') {
+                      <span class="ok">{{ a.result }}</span>
+                      @if (a.runId) { <a [routerLink]="['/runs', a.runId]">Open run</a> }
+                    }
+                    @case ('failed') { <span class="error">{{ a.result }}</span> }
+                    @case ('dismissed') { <span class="muted">Dismissed</span> }
+                    @default {
+                      <button class="primary" (click)="confirmAction(a)">Confirm</button>
+                      <button class="quiet" (click)="dismissAction(a)">Dismiss</button>
+                    }
+                  }
+                </div>
+              }
             }
             @if (thinking()) { <div class="msg msg-assistant muted">Thinking…</div> }
             <form class="chat-input" (ngSubmit)="send()">
@@ -199,7 +217,7 @@ export class ProjectPage {
   readonly notice = signal('');
   readonly showNewTicket = signal(false);
   readonly checks = signal<{ name: string; ok: boolean; message: string }[]>([]);
-  readonly messages = signal<{ role: 'user' | 'assistant'; content: string }[]>([]);
+  readonly messages = signal<ChatMessage[]>([]);
   readonly thinking = signal(false);
   readonly autoAssign = signal(false);
   readonly planning = signal(false);
@@ -341,18 +359,39 @@ export class ProjectPage {
   async send(): Promise<void> {
     const message = this.question.trim();
     if (!message) return;
-    const history = this.messages();
-    this.messages.set([...history, { role: 'user', content: message }]);
+    const history = this.messages().map(({ role, content }) => ({ role, content }));
+    this.messages.update((m) => [...m, { role: 'user', content: message }]);
     this.question = '';
     this.thinking.set(true);
     try {
-      const { answer } = await this.api.chat(this.id(), message, history);
-      this.messages.update((m) => [...m, { role: 'assistant', content: answer }]);
+      const { answer, actions } = await this.api.chat(this.id(), message, history);
+      this.messages.update((m) => [...m, { role: 'assistant', content: answer, actions: actions.map((a) => ({ ...a, state: 'pending' as const })) }]);
     } catch (e) {
       this.messages.update((m) => [...m, { role: 'assistant', content: `Couldn't answer: ${(e as Error).message}` }]);
     } finally {
       this.thinking.set(false);
     }
+  }
+
+  async confirmAction(a: ChatAction): Promise<void> {
+    this.setAction(a.id, { state: 'running' });
+    try {
+      const res = await this.api.confirmAction(this.id(), a.id);
+      this.setAction(a.id, { state: 'done', result: res.message, runId: res.runId });
+      void this.loadTickets();
+      if (a.type === 'plan_backlog') setTimeout(() => void this.loadDraft(), 5000);
+    } catch (e) {
+      this.setAction(a.id, { state: 'failed', result: (e as Error).message });
+    }
+  }
+
+  async dismissAction(a: ChatAction): Promise<void> {
+    this.setAction(a.id, { state: 'dismissed' });
+    await this.api.dismissAction(this.id(), a.id).catch(() => undefined);
+  }
+
+  private setAction(id: string, patch: Partial<ChatAction>): void {
+    this.messages.update((ms) => ms.map((m) => (m.actions?.some((a) => a.id === id) ? { ...m, actions: m.actions.map((a) => (a.id === id ? { ...a, ...patch } : a)) } : m)));
   }
 
   private flash(text: string): void {

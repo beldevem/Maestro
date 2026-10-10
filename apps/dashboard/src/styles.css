@@ -159,3 +159,4 @@ details { margin-bottom: 12px; }
 .review ul { margin: 4px 0; padding-left: 18px; }
 .review li { margin: 4px 0; white-space: pre-wrap; }
 .review-form textarea { width: 100%; }
+.action-card { align-self: flex-start; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; border: 1px dashed var(--accent); border-radius: var(--radius); padding: 6px 10px; font-size: 13px; max-width: 80%; }

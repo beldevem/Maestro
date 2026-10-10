@@ -1,6 +1,7 @@
 import Fastify, { type FastifyInstance } from 'fastify';
 import cors from '@fastify/cors';
 import fastifyStatic from '@fastify/static';
+import { randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -8,7 +9,7 @@ import { z } from 'zod';
 import { codeHostFor } from './adapters/codehost/index.js';
 import { pmFor } from './adapters/pm/index.js';
 import { docsContextFor } from './adapters/docs/index.js';
-import { askAssistant } from './agents/assistant.js';
+import { askAssistant, describeAction, type ProposedAction } from './agents/assistant.js';
 import { approveDraft, backlogItemSchema, cleanItems, draftBacklog } from './agents/planner.js';
 import type { CodingAgent } from './agents/coding-agent.js';
 import type { Store } from './db.js';
@@ -16,6 +17,7 @@ import { bus, type BusEvent } from './events.js';
 import { NotReadyError, Orchestrator } from './orchestrator.js';
 import { git } from './proc.js';
 import { KNOWN_SECRETS, type SecretStore } from './secrets.js';
+import type { Agent } from './types.js';
 import { blockedBy, checkReady, parseWorkflow, validateWorkflow } from './workflow.js';
 
 export interface ServerDeps {
@@ -85,6 +87,64 @@ export async function buildServer(d: ServerDeps): Promise<FastifyInstance> {
   };
   const repoDir = (p: ReturnType<typeof project>) => (p.codeHost.provider === 'local' ? p.codeHost.localPath ?? '' : join(d.reposDir, p.id));
   const planning = new Set<string>();
+  /** Runs the planner once per project at a time and stores the draft. */
+  const plan = async (p: ReturnType<typeof project>) => {
+    if (planning.has(p.id)) throw Object.assign(new Error('The planner is already working on this project.'), { statusCode: 409 });
+    planning.add(p.id);
+    try {
+      const tickets = await pmFor(p, d.store, d.secrets).listTickets();
+      const cwd = existsSync(repoDir(p)) ? repoDir(p) : tmpdir();
+      const docs = await docsContextFor(p, d.secrets);
+      return await draftBacklog(d, p, tickets, cwd, docs);
+    } finally {
+      planning.delete(p.id);
+    }
+  };
+
+  const agentAction = (a: Agent, action: 'pause' | 'resume' | 'unblock' | undefined) => {
+    if (action === 'pause' && a.state !== 'available') throw new Error('Only an available agent can be paused; stop its run first.');
+    const next =
+      action === 'pause' ? { state: 'paused' as const, note: 'Paused by you' }
+      : action === 'resume' && a.state === 'paused' ? { state: 'available' as const, note: '' }
+      : action === 'unblock' && a.state === 'blocked' ? { state: 'available' as const, currentRunId: null, note: '' }
+      : null;
+    if (!next) throw new Error(`Can't ${action} an agent that is ${a.state}.`);
+    const updated = d.store.updateAgent(a.id, next)!;
+    bus.publish({ type: 'agent', agent: updated });
+    return updated;
+  };
+
+  /** Actions the chat proposed, kept until you confirm or they expire; each runs at most once. */
+  const proposals = new Map<string, { projectId: string; action: ProposedAction; expires: number }>();
+  const PROPOSAL_TTL_MS = 60 * 60_000;
+  const runAction = async (p: ReturnType<typeof project>, a: ProposedAction): Promise<{ message: string; runId?: string }> => {
+    const pm = pmFor(p, d.store, d.secrets);
+    switch (a.type) {
+      case 'create_ticket': {
+        const t = await pm.createTicket({ title: a.title, description: a.description, acceptanceCriteria: a.acceptanceCriteria, size: a.size ?? undefined, labels: a.labels });
+        return { message: `Created ${t.key}.` };
+      }
+      case 'assign': {
+        const run = await d.orchestrator.start(p.id, a.ticketKey);
+        return { message: `${a.ticketKey} is assigned to ${d.store.getAgent(run.agentId)?.name ?? 'a worker'}.`, runId: run.id };
+      }
+      case 'move_ticket':
+        if (!(await pm.getTicket(a.ticketKey))) throw new Error(`Ticket ${a.ticketKey} not found.`);
+        await pm.moveTicket(a.ticketKey, a.status);
+        void d.orchestrator.tick();
+        return { message: `Moved ${a.ticketKey} to ${a.status.replace('_', ' ')}.` };
+      case 'plan_backlog':
+        void plan(p).catch((e) => console.error(`Planning from chat failed: ${(e as Error).message}`));
+        return { message: 'The planner is working; the draft shows up on the Board when it is done.' };
+      case 'pause_agent':
+      case 'resume_agent': {
+        const agent = d.store.listAgents().find((x) => x.name.toLowerCase() === a.agentName.toLowerCase());
+        if (!agent) throw new Error(`No agent called ${a.agentName}.`);
+        agentAction(agent, a.type === 'pause_agent' ? 'pause' : 'resume');
+        return { message: `${agent.name} is ${a.type === 'pause_agent' ? 'paused' : 'available again'}.` };
+      }
+    }
+  };
 
   app.get('/api/health', async () => ({ ok: true }));
 
@@ -159,17 +219,7 @@ export async function buildServer(d: ServerDeps): Promise<FastifyInstance> {
 
   // Planner: drafts a backlog you review before any ticket is created
   app.post<{ Params: { id: string } }>('/api/projects/:id/plan', async (req) => {
-    const p = project(req.params.id);
-    if (planning.has(p.id)) throw Object.assign(new Error('The planner is already working on this project.'), { statusCode: 409 });
-    planning.add(p.id);
-    try {
-      const tickets = await pmFor(p, d.store, d.secrets).listTickets();
-      const cwd = existsSync(repoDir(p)) ? repoDir(p) : tmpdir();
-      const docs = await docsContextFor(p, d.secrets);
-      return await draftBacklog(d, p, tickets, cwd, docs);
-    } finally {
-      planning.delete(p.id);
-    }
+    return plan(project(req.params.id));
   });
   app.get<{ Params: { id: string } }>('/api/projects/:id/drafts', async (req) => d.store.listDrafts(project(req.params.id).id));
   app.patch<{ Params: { id: string } }>('/api/drafts/:id', async (req) => {
@@ -264,17 +314,7 @@ export async function buildServer(d: ServerDeps): Promise<FastifyInstance> {
   app.post<{ Params: { id: string }; Body: { action: 'pause' | 'resume' | 'unblock' } }>('/api/agents/:id/action', async (req) => {
     const a = d.store.getAgent(req.params.id);
     if (!a) throw Object.assign(new Error('Agent not found.'), { statusCode: 404 });
-    const action = req.body?.action;
-    if (action === 'pause' && a.state !== 'available') throw new Error('Only an available agent can be paused; stop its run first.');
-    const next =
-      action === 'pause' ? { state: 'paused' as const, note: 'Paused by you' }
-      : action === 'resume' && a.state === 'paused' ? { state: 'available' as const, note: '' }
-      : action === 'unblock' && a.state === 'blocked' ? { state: 'available' as const, currentRunId: null, note: '' }
-      : null;
-    if (!next) throw new Error(`Can't ${action} an agent that is ${a.state}.`);
-    const updated = d.store.updateAgent(a.id, next)!;
-    bus.publish({ type: 'agent', agent: updated });
-    return updated;
+    return agentAction(a, req.body?.action);
   });
   app.delete<{ Params: { id: string } }>('/api/agents/:id', async (req) => {
     const a = d.store.getAgent(req.params.id);
@@ -290,7 +330,28 @@ export async function buildServer(d: ServerDeps): Promise<FastifyInstance> {
       .object({ message: z.string().min(1), history: z.array(z.object({ role: z.enum(['user', 'assistant']), content: z.string() })).default([]) })
       .parse(req.body);
     const tickets = await pmFor(p, d.store, d.secrets).listTickets().catch(() => []);
-    return askAssistant(d, p, tickets, repoDir(p), body.history, body.message);
+    const reply = await askAssistant(d, p, tickets, repoDir(p), body.history, body.message);
+    const now = Date.now();
+    for (const [id, x] of proposals) if (x.expires < now) proposals.delete(id);
+    const actions = reply.actions.map((action) => {
+      const id = randomUUID();
+      proposals.set(id, { projectId: p.id, action, expires: now + PROPOSAL_TTL_MS });
+      return { id, type: action.type, summary: describeAction(action), action };
+    });
+    return { answer: reply.answer, costUsd: reply.costUsd, actions };
+  });
+  app.post<{ Params: { id: string; actionId: string } }>('/api/projects/:id/chat/actions/:actionId', async (req) => {
+    const p = project(req.params.id);
+    const proposal = proposals.get(req.params.actionId);
+    if (!proposal || proposal.projectId !== p.id || proposal.expires < Date.now()) {
+      throw Object.assign(new Error('This proposal has expired or was already used. Ask again.'), { statusCode: 404 });
+    }
+    proposals.delete(req.params.actionId);
+    return runAction(p, proposal.action);
+  });
+  app.delete<{ Params: { id: string; actionId: string } }>('/api/projects/:id/chat/actions/:actionId', async (req) => {
+    proposals.delete(req.params.actionId);
+    return { ok: true };
   });
 
   // Settings

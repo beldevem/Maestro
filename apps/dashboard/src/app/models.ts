@@ -127,6 +127,22 @@ export const CHECKS_LABEL: Record<ChecksState, string> = {
   none: 'No checks',
 };
 
+export interface ChatAction {
+  id: string;
+  type: string;
+  summary: string;
+  /** Set in the dashboard once you act on it. */
+  state?: 'pending' | 'running' | 'done' | 'dismissed' | 'failed';
+  result?: string;
+  runId?: string;
+}
+
+export interface ChatMessage {
+  role: 'user' | 'assistant';
+  content: string;
+  actions?: ChatAction[];
+}
+
 export interface RunEvent {
   id: number;
   runId: string;
