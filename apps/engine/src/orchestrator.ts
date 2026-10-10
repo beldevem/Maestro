@@ -14,6 +14,7 @@ import { appendLearnings, extractLearnings, MEMORY_FILE, readMemoryFile, writeMe
 import { git } from './proc.js';
 import type { SecretStore } from './secrets.js';
 import { budgetState, perRunCap, startOfToday, usd } from './budget.js';
+import { numberSetting } from './settings.js';
 import type { Agent, AgentState, AlertKind, Project, Review, ReviewComment, Run, RunEventKind, SpendKind, Ticket } from './types.js';
 import { blockedBy, branchName, checkReady, commitMessage, parseWorkflow, ticketArea, type Workflow } from './workflow.js';
 
@@ -76,7 +77,7 @@ export class Orchestrator {
   constructor(private readonly d: OrchestratorDeps) {}
 
   maxConcurrent(): number {
-    return Number(this.d.store.getSetting('maxConcurrentRuns') ?? 3);
+    return numberSetting(this.d.store, 'maxConcurrentRuns');
   }
 
   workerModel(agent: Agent): string {
@@ -815,7 +816,7 @@ export class Orchestrator {
    * Removes the worktrees of finished runs (failed, stopped, done) that ended more than `days` ago, or all of them with 0.
    * Branches stay. Returns how many were removed.
    */
-  async cleanupFinished(days = Number(this.d.store.getSetting('worktrees.keepDays') ?? 3), projectId?: string): Promise<number> {
+  async cleanupFinished(days = numberSetting(this.d.store, 'worktrees.keepDays'), projectId?: string): Promise<number> {
     const { store } = this.d;
     if (days < 0) return 0;
     const before = Date.now() - days * 86_400_000;

@@ -9,6 +9,7 @@ import type { SecretInfo } from '../models';
   template: `
     <header class="page-head"><h1>Settings</h1></header>
     @if (notice()) { <p class="notice">{{ notice() }}</p> }
+    @if (error()) { <p class="error">{{ error() }}</p> }
 
     <section class="panel">
       <h2>API keys and tokens</h2>
@@ -65,7 +66,9 @@ export class SettingsPage {
   readonly secrets = signal<SecretInfo[]>([]);
   readonly backend = signal<'keychain' | 'file'>('file');
   readonly notice = signal('');
+  readonly error = signal('');
   settings: Record<string, string> = {};
+  values: Record<string, string> = {};
   readonly notifySupported = typeof Notification !== 'undefined';
   readonly notify = signal(this.notifySupported && this.readNotify() && Notification.permission === 'granted');
   readonly notifyDenied = signal(this.notifySupported && Notification.permission === 'denied');
@@ -90,34 +93,51 @@ export class SettingsPage {
     this.notifyDenied.set(permission === 'denied');
     if (enabled) new Notification('Maestro', { body: 'Notifications are on.' });
   }
-  values: Record<string, string> = {};
 
   constructor() {
     void this.load();
   }
 
   async load(): Promise<void> {
-    const s = await this.api.settings();
-    this.settings = s.settings;
-    this.secrets.set(s.secrets);
-    this.backend.set(s.secretsBackend);
+    await this.attempt(async () => {
+      const s = await this.api.settings();
+      this.settings = s.settings;
+      this.secrets.set(s.secrets);
+      this.backend.set(s.secretsBackend);
+    });
   }
 
   async setSecret(s: SecretInfo): Promise<void> {
-    await this.api.setSecret(s.name, this.values[s.name]);
-    this.values[s.name] = '';
-    await this.load();
-    this.flash(`${s.label} saved.`);
+    await this.attempt(async () => {
+      await this.api.setSecret(s.name, this.values[s.name]);
+      this.values[s.name] = '';
+      await this.load();
+      this.flash(`${s.label} saved.`);
+    });
   }
 
   async clear(s: SecretInfo): Promise<void> {
-    await this.api.deleteSecret(s.name);
-    await this.load();
+    await this.attempt(async () => {
+      await this.api.deleteSecret(s.name);
+      await this.load();
+    });
   }
 
+  /** Number inputs give null when emptied; that is sent as "" so the engine says what is wrong instead of storing "null". */
   async save(): Promise<void> {
-    await this.api.saveSettings(Object.fromEntries(Object.entries(this.settings).map(([k, v]) => [k, String(v)])));
-    this.flash('Saved.');
+    await this.attempt(async () => {
+      await this.api.saveSettings(Object.fromEntries(Object.entries(this.settings).map(([k, v]) => [k, v === null || v === undefined ? '' : String(v)])));
+      this.flash('Saved.');
+    });
+  }
+
+  private async attempt(fn: () => Promise<void>): Promise<void> {
+    this.error.set('');
+    try {
+      await fn();
+    } catch (e) {
+      this.error.set((e as Error).message);
+    }
   }
 
   private flash(text: string): void {

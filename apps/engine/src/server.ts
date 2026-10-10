@@ -19,6 +19,7 @@ import { git } from './proc.js';
 import { budgetState, dailyCap, startOfToday, usd } from './budget.js';
 import { DESIGN_DIR } from './adapters/design/index.js';
 import { readBaseMemory } from './memory.js';
+import { invalidSetting } from './settings.js';
 import { TEMPLATES, templateById, workflowFor } from './templates.js';
 import { computeMetrics } from './metrics.js';
 import { KNOWN_SECRETS, type SecretStore } from './secrets.js';
@@ -516,6 +517,8 @@ export async function buildServer(d: ServerDeps): Promise<FastifyInstance> {
   });
   app.put('/api/settings', async (req) => {
     const body = z.record(z.string(), z.string()).parse(req.body);
+    const problems = Object.entries(body).map(([k, v]) => invalidSetting(k, v)).filter(Boolean);
+    if (problems.length) throw new Error(problems.join(' '));
     for (const [k, v] of Object.entries(body)) d.store.setSetting(k, v);
     return { ok: true };
   });

@@ -1,4 +1,5 @@
 import type { Store } from './db.js';
+import { numberSetting } from './settings.js';
 
 /** Midnight today on this machine, as an ISO timestamp. */
 export function startOfToday(at = new Date()): string {
@@ -9,7 +10,9 @@ export function startOfToday(at = new Date()): string {
 
 /** The project's daily cap in USD: its own setting, else the default for all projects. 0 means no cap. */
 export function dailyCap(store: Store, projectId: string): number {
-  return Number(store.getSetting(`budget.daily.${projectId}`) ?? store.getSetting('budget.projectDailyUsd') ?? 0) || 0;
+  const own = store.getSetting(`budget.daily.${projectId}`);
+  const n = own?.trim() ? Number(own) : NaN;
+  return Number.isFinite(n) && n >= 0 ? n : numberSetting(store, 'budget.projectDailyUsd');
 }
 
 export interface BudgetState {
@@ -28,7 +31,7 @@ export function budgetState(store: Store, projectId: string, at = new Date()): B
 }
 
 export function perRunCap(store: Store): number {
-  return Number(store.getSetting('budget.perRunUsd') ?? 5) || 0;
+  return numberSetting(store, 'budget.perRunUsd');
 }
 
 export const usd = (n: number) => `$${n.toFixed(2)}`;
