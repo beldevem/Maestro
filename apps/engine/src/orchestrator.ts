@@ -731,8 +731,14 @@ export class Orchestrator {
 
   /** On startup, runs that were in flight when the engine stopped can't resume. */
   recover(): void {
-    for (const run of this.d.store.listRuns().filter((r) => r.status === 'running')) {
-      this.d.store.updateRun(run.id, { status: 'failed', error: 'Engine restarted during the run.', endedAt: new Date().toISOString() });
+    for (const run of this.d.store.listAllRuns().filter((r) => r.status === 'running')) {
+      if (run.readyAt) {
+        // It was addressing feedback on a published change: the change stands, and the feedback is still pending, so it is picked up again.
+        this.d.store.updateRun(run.id, { status: 'in_review' });
+        this.log(run.id, 'info', 'The engine restarted while a worker was addressing feedback; it will be picked up again.');
+      } else {
+        this.d.store.updateRun(run.id, { status: 'failed', error: 'Engine restarted during the run.', endedAt: new Date().toISOString() });
+      }
     }
     for (const run of this.d.store.listRuns().filter((r) => r.status === 'reviewing')) {
       this.d.store.updateRun(run.id, { status: 'in_review' });

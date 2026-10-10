@@ -207,6 +207,23 @@ describe('review loop', () => {
     await app.close();
   });
 
+  it('after an engine restart, a published run that was addressing feedback goes back to review and the feedback is retried', async () => {
+    const agent = new ScriptedAgent();
+    const { orchestrator, project, ticket } = setup(agent);
+    const run = await orchestrator.start(project.id, ticket.key);
+    await waitFor(() => settled(store.getRun(run.id)!.status));
+    store.addReview({ runId: run.id, source: 'human', verdict: 'changes_requested', summary: 'Shout it.', comments: [] });
+    // As if the engine died mid-fix: running, published, feedback not yet addressed.
+    store.updateRun(run.id, { status: 'running' });
+    const fresh = new Orchestrator({ store, secrets, agent, reposDir: join(home, 'repos'), worktreesDir: join(home, 'wt') });
+    fresh.recover();
+    expect(store.getRun(run.id)!.status).toBe('in_review');
+    await fresh.tick();
+    await waitFor(() => agent.worker.length === 2 && settled(store.getRun(run.id)!.status));
+    expect(agent.worker[1].prompt).toContain('Shout it.');
+    expect(store.getRun(run.id)!.status).toBe('in_review');
+  });
+
   it('posts reviews on the PR and follows it: checks, change requests and the merge', async () => {
     const agent = new ScriptedAgent([changes]);
     const github = new FakeGitHub(repo);
