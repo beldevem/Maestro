@@ -76,7 +76,7 @@ export class Api {
   spend = () => this.call<ProjectSpend[]>('GET', '/spend');
   setProjectBudget = (projectId: string, dailyUsd: number | null) => this.call<{ dailyCap: number }>('PUT', `/projects/${projectId}/budget`, { dailyUsd });
 
-  settings = () => this.call<{ settings: Record<string, string>; secrets: SecretInfo[] }>('GET', '/settings');
+  settings = () => this.call<{ settings: Record<string, string>; secrets: SecretInfo[]; secretsBackend: 'keychain' | 'file' }>('GET', '/settings');
   saveSettings = (s: Record<string, string>) => this.call('PUT', '/settings', s);
   setSecret = (name: string, value: string) => this.call('PUT', `/secrets/${name}`, { value });
   deleteSecret = (name: string) => this.call('DELETE', `/secrets/${name}`);

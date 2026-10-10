@@ -101,7 +101,8 @@ describe('auto-assign', () => {
 
     // When the first two finish, the second api ticket is free to go; the dependent one waits for done.
     agent.release();
-    await waitFor(() => running().length === 1);
+    const statusOf = (key: string) => store.listRuns(project.id).find((r) => r.ticketKey === key)?.status;
+    await waitFor(() => statusOf(api.key) === 'in_review' && statusOf(ui.key) === 'in_review' && running().includes(api2.key));
     expect(running()).toEqual([api2.key]);
 
     store.setManualTicketStatus(project.id, api.key, 'done');

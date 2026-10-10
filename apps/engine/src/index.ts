@@ -9,7 +9,9 @@ import { buildServer } from './server.js';
 
 ensureHome();
 const store = new Store(paths.db);
-const secrets = new SecretStore(paths.secrets);
+const secrets = SecretStore.open(paths.secrets);
+console.log(`Secrets are kept in ${secrets.kind === 'keychain' ? 'the system keychain' : paths.secrets}.`);
+if (secrets.migrated.length) console.log(`Moved ${secrets.migrated.join(', ')} from ${paths.secrets} into the keychain.`);
 const agent = new ClaudeCodingAgent();
 const orchestrator = new Orchestrator({ store, secrets, agent, reposDir: paths.repos, worktreesDir: paths.worktrees });
 orchestrator.recover();

@@ -31,12 +31,12 @@ This covers Phases 0 to 3 of the plan: the board, worker agents, agent states, c
 - **Budgets**: a budget per run (cumulative over the run's agent calls; a run that spends it is blocked, and the reviewer step is skipped) and a daily budget per project (a default in Settings, an override on the project's Runs tab). At the daily budget nothing new starts and auto-assign pauses until tomorrow. Every agent call's cost goes into a spend ledger; the Projects screen shows spend today, over 7 days and in total.
 - **Metrics** per project or across all, for all time or the last 7 or 30 days: runs, success rate, mean time to PR, mean cycle time, first-pass review rate, fix attempts and review rounds per run, cost per ticket, and a per-ticket table.
 - **Alerts** when an agent is blocked, a run fails, a budget is reached or a change is ready for review: in the Alerts screen (with an unread count in the menu) and, if you turn them on in Settings, as desktop notifications from the browser.
+- **Secrets in the system keychain** through `secret-tool` (libsecret: GNOME Keyring or KWallet) when it is installed, with no native npm module; otherwise in `~/.maestro/secrets.json`, readable only by you. Secrets already in the file move into the keychain on the first start that finds one. `MAESTRO_SECRETS=file` or `keychain` forces a choice.
 - **Settings** hold API keys and tokens, the default models (worker, chat, planner), how many tickets run at once, and a budget per run.
 
 ## Not in the MVP yet
 
 - Dependency links in Jira and Trello themselves: Maestro keeps dependencies in its own database and writes them into the ticket text.
-- Secrets in the OS keychain. For now they are in `~/.maestro/secrets.json`, readable only by you.
 
 ## Requirements
 

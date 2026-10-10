@@ -12,7 +12,12 @@ import type { SecretInfo } from '../models';
 
     <section class="panel">
       <h2>API keys and tokens</h2>
-      <p class="hint">Stored on this machine in ~/.maestro/secrets.json, readable only by you. Values are never shown again.</p>
+      @if (backend() === 'keychain') {
+        <p class="hint">Stored in your system keychain. Values are never shown again.</p>
+      } @else {
+        <p class="hint">Stored on this machine in ~/.maestro/secrets.json, readable only by you. Values are never shown again.
+          To keep them in the system keychain instead, install secret-tool (on Ubuntu: <span class="mono">sudo apt install libsecret-tools</span>) and restart Maestro; it moves them over.</p>
+      }
       @for (s of secrets(); track s.name) {
         <div class="secret">
           <div>
@@ -57,6 +62,7 @@ import type { SecretInfo } from '../models';
 export class SettingsPage {
   private readonly api = inject(Api);
   readonly secrets = signal<SecretInfo[]>([]);
+  readonly backend = signal<'keychain' | 'file'>('file');
   readonly notice = signal('');
   settings: Record<string, string> = {};
   readonly notifySupported = typeof Notification !== 'undefined';
@@ -93,6 +99,7 @@ export class SettingsPage {
     const s = await this.api.settings();
     this.settings = s.settings;
     this.secrets.set(s.secrets);
+    this.backend.set(s.secretsBackend);
   }
 
   async setSecret(s: SecretInfo): Promise<void> {

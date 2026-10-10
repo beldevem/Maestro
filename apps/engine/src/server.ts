@@ -438,6 +438,7 @@ export async function buildServer(d: ServerDeps): Promise<FastifyInstance> {
         ...Object.fromEntries(Object.entries(d.store.allSettings()).filter(([k]) => !/^(autoAssign|memory|budget\.daily)\./.test(k))),
       },
       secrets: KNOWN_SECRETS.map((s) => ({ ...s, set: set.has(s.name) || !!process.env[s.name] })),
+      secretsBackend: d.secrets.kind,
     };
   });
   app.put('/api/settings', async (req) => {
