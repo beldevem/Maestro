@@ -16,6 +16,8 @@ export interface PmAdapter {
   createTicket(input: NewTicket): Promise<Ticket>;
   moveTicket(key: string, status: TicketStatus): Promise<void>;
   comment(key: string, text: string): Promise<void>;
+  /** Records "key depends on dependsOn" in the tool itself, where it has links (Jira). Maestro keeps its own copy either way. */
+  linkDependency?(key: string, dependsOn: string): Promise<void>;
 }
 
 /** Acceptance criteria are kept in the description under this heading for tools with no dedicated field. */

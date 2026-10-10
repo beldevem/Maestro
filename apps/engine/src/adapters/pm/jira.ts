@@ -159,6 +159,14 @@ export class JiraPm implements PmAdapter {
     });
   }
 
+  /** A "Blocks" link: dependsOn blocks key. */
+  async linkDependency(key: string, dependsOn: string): Promise<void> {
+    await this.call('/rest/api/3/issueLink', {
+      method: 'POST',
+      body: JSON.stringify({ type: { name: 'Blocks' }, outwardIssue: { key: dependsOn }, inwardIssue: { key } }),
+    });
+  }
+
   async comment(key: string, text: string): Promise<void> {
     await this.call(`/rest/api/3/issue/${encodeURIComponent(key)}/comment`, {
       method: 'POST',

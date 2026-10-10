@@ -40,7 +40,7 @@ It covers the whole plan: the board and worker agents, the planner and auto-assi
 
 ## Known limits
 
-- Dependencies live in Maestro's database and are written into the ticket text ("Depends on: KEY"), not as Jira or Trello links.
+- Dependencies live in Maestro's database and are written into the ticket text ("Depends on: KEY"). On Jira they are also added as "Blocks" links; Trello has no links.
 - Pull requests are polled every minute (there are no webhooks on a local machine), so a merge or a comment shows up within about a minute.
 - GitLab and Bitbucket are tested against their API shapes, not yet against live accounts.
 - Workers run the code and tests they write, as the quality gates need. Use the Docker sandbox (`sandbox.type: docker`) for repositories or tickets you don't fully trust.

@@ -115,7 +115,11 @@ export async function approveDraft(store: Store, pm: PmAdapter, draft: BacklogDr
       });
       keys[i] = ticket.key;
       created.push(ticket);
-      for (const k of depKeys) store.addDependency(draft.projectId, ticket.key, k);
+      for (const k of depKeys) {
+        store.addDependency(draft.projectId, ticket.key, k);
+        // Best effort: the dependency counts from Maestro's own record whether or not the PM tool takes the link.
+        await pm.linkDependency?.(ticket.key, k).catch(() => undefined);
+      }
     } catch (e) {
       error = `Stopped at "${item.title}": ${e instanceof Error ? e.message : String(e)}`;
       break;

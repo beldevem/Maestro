@@ -86,6 +86,12 @@ describe('Jira', () => {
     expect(decodeURIComponent(api.calls[0].url)).toContain('project = "APP" ORDER BY rank ASC');
   });
 
+  it('links a dependency as "Blocks"', async () => {
+    const api = fakeApi({ 'POST /rest/api/3/issueLink': [201, {}] });
+    await new JiraPm(settings, () => 'tok', api.impl).linkDependency('APP-2', 'APP-1');
+    expect(api.calls[0].body).toEqual({ type: { name: 'Blocks' }, outwardIssue: { key: 'APP-1' }, inwardIssue: { key: 'APP-2' } });
+  });
+
   it('follows page tokens to list every issue', async () => {
     const api = fakeApi({
       'GET /rest/api/3/search/jql': (c) => c.url.includes('nextPageToken=p2')
