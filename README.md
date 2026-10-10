@@ -2,7 +2,7 @@
 
 A dashboard on your machine where you link projects to a code host and a PM tool, hand tickets to coding agents, and review the branches and pull requests they produce.
 
-This covers Phases 0 to 3 of the plan: the board, worker agents, agent states, chat and connector settings, the planner and auto-assign, and the reviewer agent with its fix loop.
+It covers the whole plan: the board and worker agents, the planner and auto-assign, the reviewer agent and its fix loop, design and docs context, GitHub, GitLab, Bitbucket and local code hosts, chat that proposes actions, project memory, budgets and alerts, metrics, keychain secrets, templates and an optional Docker sandbox.
 
 ## What works now
 
@@ -38,9 +38,13 @@ This covers Phases 0 to 3 of the plan: the board, worker agents, agent states, c
 - **Secrets in the system keychain** through `secret-tool` (libsecret: GNOME Keyring or KWallet) when it is installed, with no native npm module; otherwise in `~/.maestro/secrets.json`, readable only by you. Secrets already in the file move into the keychain on the first start that finds one. `MAESTRO_SECRETS=file` or `keychain` forces a choice.
 - **Settings** hold API keys and tokens, the default models (worker, chat, planner), how many tickets run at once, and a budget per run.
 
-## Not in the MVP yet
+## Known limits
 
-- Dependency links in Jira and Trello themselves: Maestro keeps dependencies in its own database and writes them into the ticket text.
+- Dependencies live in Maestro's database and are written into the ticket text ("Depends on: KEY"), not as Jira or Trello links.
+- Pull requests are polled every minute (there are no webhooks on a local machine), so a merge or a comment shows up within about a minute.
+- GitLab and Bitbucket are tested against their API shapes, not yet against live accounts.
+- Workers run the code and tests they write, as the quality gates need. Use the Docker sandbox (`sandbox.type: docker`) for repositories or tickets you don't fully trust.
+- The keychain needs `secret-tool` (on Ubuntu: `sudo apt install libsecret-tools`); without it secrets stay in `~/.maestro/secrets.json`.
 
 ## Requirements
 
