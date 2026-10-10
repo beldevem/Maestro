@@ -22,14 +22,29 @@ const DEFAULT_STATUS: Record<TicketStatus, string> = {
 
 type Adf = { type: string; text?: string; content?: Adf[] };
 
-function adfToText(node: Adf | null | undefined): string {
+/**
+ * Atlassian Document Format to plain text: one line per paragraph (so it round-trips with textToAdf),
+ * "- " and "1. " for lists, fenced code blocks.
+ */
+export function adfToText(node: Adf | null | undefined): string {
   if (!node) return '';
-  if (node.type === 'text') return node.text ?? '';
-  const inner = (node.content ?? []).map(adfToText).join(node.type === 'doc' ? '\n' : '');
-  return ['paragraph', 'heading', 'listItem'].includes(node.type) ? `${inner}\n` : inner;
+  const inner = () => (node.content ?? []).map(adfToText).join('');
+  switch (node.type) {
+    case 'text': return node.text ?? '';
+    case 'hardBreak': return '\n';
+    case 'paragraph':
+    case 'heading': return `${inner()}\n`;
+    case 'codeBlock': return `\`\`\`\n${inner()}\n\`\`\`\n`;
+    case 'bulletList':
+    case 'orderedList':
+      return (node.content ?? [])
+        .map((item, i) => `${node.type === 'bulletList' ? '-' : `${i + 1}.`} ${adfToText(item).trim().replace(/\n/g, '\n  ')}\n`)
+        .join('');
+    default: return inner();
+  }
 }
 
-function textToAdf(text: string): Adf {
+export function textToAdf(text: string): Adf {
   return {
     type: 'doc',
     // @ts-expect-error ADF needs a version field on the root
@@ -44,13 +59,14 @@ export class JiraPm implements PmAdapter {
   constructor(
     private readonly s: JiraSettings,
     private readonly token: () => string | undefined,
+    private readonly fetchImpl: typeof fetch = fetch,
   ) {}
 
   private async call<T>(path: string, init: RequestInit = {}): Promise<T> {
     const token = this.token();
     if (!token) throw new Error('Add a Jira API token in Settings.');
     if (!this.s.baseUrl || !this.s.email || !this.s.projectKey) throw new Error('Set the Jira URL, email and project key on the project.');
-    const res = await fetch(`${this.s.baseUrl.replace(/\/$/, '')}${path}`, {
+    const res = await this.fetchImpl(`${this.s.baseUrl.replace(/\/$/, '')}${path}`, {
       ...init,
       headers: {
         Authorization: `Basic ${Buffer.from(`${this.s.email}:${token}`).toString('base64')}`,

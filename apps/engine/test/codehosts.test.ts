@@ -4,23 +4,7 @@ import { GitLabCodeHost } from '../src/adapters/codehost/gitlab.js';
 import { HttpGit } from '../src/adapters/codehost/http-git.js';
 import { MAESTRO_MARK } from '../src/adapters/codehost/types.js';
 import type { Project } from '../src/types.js';
-
-type Call = { method: string; url: string; body: any; headers: Record<string, string> };
-
-/** Routes "METHOD path-substring" to a status and JSON body, and records every call. */
-function fakeApi(routes: Record<string, [number, unknown]>) {
-  const calls: Call[] = [];
-  const impl = (async (input: string | URL | Request, init?: RequestInit) => {
-    const url = String(input);
-    const method = init?.method ?? 'GET';
-    calls.push({ method, url, body: init?.body ? JSON.parse(String(init.body)) : undefined, headers: (init?.headers ?? {}) as Record<string, string> });
-    const key = Object.keys(routes).filter((k) => k.startsWith(`${method} `) && url.includes(k.slice(method.length + 1))).sort((a, b) => b.length - a.length)[0];
-    if (!key) return new Response('no route', { status: 404 });
-    const [status, body] = routes[key];
-    return new Response(JSON.stringify(body), { status });
-  }) as typeof fetch;
-  return { impl, calls };
-}
+import { fakeApi } from './fake-api.js';
 
 const project = (provider: Project['codeHost']['provider'], repo: string, baseUrl?: string): Project => ({
   id: 'p1', name: 'X', description: '', codeHost: { provider, repo, baseUrl, defaultBranch: 'main' },

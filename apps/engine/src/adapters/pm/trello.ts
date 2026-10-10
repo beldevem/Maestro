@@ -17,13 +17,14 @@ export class TrelloPm implements PmAdapter {
   constructor(
     private readonly s: TrelloSettings,
     private readonly creds: () => { key?: string; token?: string },
+    private readonly fetchImpl: typeof fetch = fetch,
   ) {}
 
   private async call<T>(path: string, init: RequestInit = {}, params: Record<string, string> = {}): Promise<T> {
     const { key, token } = this.creds();
     if (!key || !token) throw new Error('Add a Trello API key and token in Settings.');
     const qs = new URLSearchParams({ ...params, key, token });
-    const res = await fetch(`${API}${path}?${qs}`, { ...init, headers: { Accept: 'application/json', ...init.headers } });
+    const res = await this.fetchImpl(`${API}${path}?${qs}`, { ...init, headers: { Accept: 'application/json', ...init.headers } });
     if (!res.ok) throw new Error(`Trello ${init.method ?? 'GET'} ${path} failed (${res.status}): ${await res.text()}`);
     return (await res.json()) as T;
   }
@@ -67,11 +68,28 @@ export class TrelloPm implements PmAdapter {
     return card ? this.toTicket(card) : undefined;
   }
 
+  /** Trello labels are board objects: find each by name, creating the ones the board doesn't have. */
+  private async labelIds(names: string[]): Promise<string[]> {
+    if (!names.length) return [];
+    const existing = await this.call<{ id: string; name: string }[]>(`/boards/${this.s.boardId}/labels`, {}, { fields: 'name', limit: '1000' });
+    const ids: string[] = [];
+    for (const name of [...new Set(names)]) {
+      const found = existing.find((l) => l.name.toLowerCase() === name.toLowerCase());
+      if (found) ids.push(found.id);
+      else ids.push((await this.call<{ id: string }>('/labels', { method: 'POST' }, { name, color: 'null', idBoard: this.s.boardId })).id);
+    }
+    return ids;
+  }
+
   async createTicket(input: NewTicket): Promise<Ticket> {
+    const idList = this.listFor('todo');
+    const labels = input.size ? [...input.labels, `size:${input.size}`] : input.labels;
+    const idLabels = await this.labelIds(labels);
     const card = await this.call<any>('/cards', { method: 'POST' }, {
-      idList: this.listFor('todo'),
+      idList,
       name: input.title,
       desc: joinDescription(input.description, input.acceptanceCriteria),
+      ...(idLabels.length ? { idLabels: idLabels.join(',') } : {}),
     });
     return this.toTicket(card);
   }
