@@ -308,6 +308,7 @@ export async function buildServer(d: ServerDeps): Promise<FastifyInstance> {
     if (!run) throw Object.assign(new Error('Run not found.'), { statusCode: 404 });
     return { ...run, active: d.orchestrator.isActive(run.id), events: d.store.listEvents(run.id), reviews: d.store.listReviews(run.id) };
   });
+  app.post<{ Params: { id: string } }>('/api/runs/:id/merge', async (req) => d.orchestrator.mergeLocal(req.params.id));
   app.post<{ Params: { id: string } }>('/api/runs/:id/reviews', async (req) => {
     const body = z
       .object({

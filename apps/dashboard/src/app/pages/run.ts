@@ -47,7 +47,10 @@ import { CHECKS_LABEL, RUN_LABEL, VERDICT_LABEL, type Review, type Run, type Run
           <label>{{ r.status === 'blocked' ? 'Guidance' : 'What should change?' }} <textarea [(ngModel)]="feedback" name="feedback" rows="4" placeholder="One point per line"></textarea></label>
           <div class="row">
             <button type="submit" [disabled]="!feedback.trim() || sending()">{{ r.status === 'blocked' ? 'Send to the worker' : 'Request changes' }}</button>
-            <button type="button" [class.primary]="r.status !== 'blocked'" (click)="approve()" [disabled]="sending()">{{ r.prNumber || r.status === 'blocked' ? 'Mark done' : 'Approve and finish' }}</button>
+            @if (r.status === 'in_review' && !r.prUrl) {
+              <button type="button" class="primary" (click)="merge()" [disabled]="sending()">Approve and merge</button>
+            }
+            <button type="button" [class.primary]="r.status !== 'blocked' && !!r.prUrl" (click)="approve()" [disabled]="sending()">{{ r.prUrl || r.status === 'blocked' ? 'Mark done' : 'Approve, merge myself' }}</button>
           </div>
           @if (reviewError()) { <p class="error">{{ reviewError() }}</p> }
         </form>
@@ -139,6 +142,19 @@ export class RunPage {
   async approve(): Promise<void> {
     if (!confirm('Mark this ticket done? The worktree folder is removed; the branch stays.')) return;
     await this.sendReview('approve', '');
+  }
+
+  async merge(): Promise<void> {
+    if (!confirm('Merge this branch into the base branch of your local repository and mark the ticket done?')) return;
+    this.sending.set(true);
+    this.reviewError.set('');
+    try {
+      await this.api.mergeRun(this.id());
+    } catch (e) {
+      this.reviewError.set((e as Error).message);
+    } finally {
+      this.sending.set(false);
+    }
   }
 
   private async sendReview(verdict: 'approve' | 'changes_requested', summary: string): Promise<void> {

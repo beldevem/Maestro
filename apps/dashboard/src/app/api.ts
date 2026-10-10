@@ -52,6 +52,7 @@ export class Api {
   run = (id: string) => this.call<Run & { active: boolean; events: RunEvent[]; reviews: Review[] }>('GET', `/runs/${id}`);
   review = (id: string, verdict: 'approve' | 'changes_requested', summary = '', comments: ReviewComment[] = []) =>
     this.call<Review>('POST', `/runs/${id}/reviews`, { verdict, summary, comments });
+  mergeRun = (id: string) => this.call<Run>('POST', `/runs/${id}/merge`, {});
   pullRequests = () => this.call<PullRequestRow[]>('GET', '/pull-requests');
   pollPullRequests = () => this.call('POST', '/pull-requests/poll', {});
   diff = (id: string) => this.call<{ base: string; diff: string }>('GET', `/runs/${id}/diff`);

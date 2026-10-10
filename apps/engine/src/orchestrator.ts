@@ -662,6 +662,44 @@ export class Orchestrator {
     return updated;
   }
 
+  /**
+   * Local folders only: merges the run's branch into the base branch, then finishes the run.
+   * With the base checked out it merges only into a clean working tree and aborts on conflicts;
+   * otherwise it moves the base forward only when that is a fast-forward. Your files are never left half-merged.
+   */
+  async mergeLocal(runId: string): Promise<Run> {
+    const { store } = this.d;
+    const run = store.getRun(runId);
+    if (!run) throw new Error('Run not found.');
+    const project = store.getProject(run.projectId);
+    if (!project) throw new Error('Project not found.');
+    if (project.codeHost.provider !== 'local') throw new Error('Merge the pull request on the code host; Maestro finishes the ticket when it sees the merge.');
+    if (this.active.has(runId) || run.status !== 'in_review') throw new Error('Only a run that is waiting for review can be merged.');
+    const base = parseWorkflow(project.workflowYaml).base_branch;
+    const repoPath = await this.host(project).ensureRepo(project);
+    const current = await git(repoPath, ['rev-parse', '--abbrev-ref', 'HEAD']);
+    if (current === base) {
+      if (await git(repoPath, ['status', '--porcelain', '--untracked-files=no'])) {
+        throw new Error(`${base} has uncommitted changes in ${repoPath}; commit or stash them, then merge again.`);
+      }
+      const identity = (await git(repoPath, ['config', 'user.email']).catch(() => '')) ? [] : ['-c', 'user.name=Maestro', '-c', 'user.email=maestro@localhost'];
+      try {
+        await git(repoPath, [...identity, 'merge', '--no-ff', '-m', `Merge ${run.ticketKey}: ${run.ticketTitle}`, run.branch]);
+      } catch (e) {
+        await git(repoPath, ['merge', '--abort']).catch(() => undefined);
+        throw new Error(`The branch does not merge cleanly into ${base}; merge it yourself. ${(e as Error).message.split('\n').slice(-1)[0]}`);
+      }
+    } else {
+      try {
+        await git(repoPath, ['fetch', '.', `${run.branch}:${base}`]);
+      } catch {
+        throw new Error(`${base} has moved on since this branch started and is not checked out here; merge ${run.branch} yourself.`);
+      }
+    }
+    this.log(runId, 'info', `Merged ${run.branch} into ${base}.`);
+    return this.complete(runId, 'merged');
+  }
+
   /** Your review in Maestro: approve completes the run; changes requested go to a worker. */
   async humanReview(runId: string, input: { verdict: 'approve' | 'changes_requested'; summary: string; comments: ReviewComment[] }): Promise<Review> {
     const { store } = this.d;
