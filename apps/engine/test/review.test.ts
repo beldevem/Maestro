@@ -148,6 +148,8 @@ describe('review loop', () => {
     expect(asked.statusCode).toBe(200);
     await waitFor(() => agent.worker.length === 2 && settled(store.getRun(run.id)!.status));
     expect(agent.worker[1].prompt).toContain('Use my name.');
+    expect(agent.reviewer[0].systemPrompt).not.toContain('Change requests from people');
+    expect(agent.reviewer[1].systemPrompt).toContain('## Change requests from people (check each was handled)\n- You (the owner): Use my name.');
     expect(store.getRun(run.id)!.status).toBe('in_review');
     expect(store.pendingFeedback(run.id)).toEqual([]);
 
@@ -160,6 +162,14 @@ describe('review loop', () => {
 
     const detail = (await app.inject({ method: 'GET', url: `/api/runs/${run.id}` })).json();
     expect(detail.reviews.map((r: { source: string }) => r.source)).toEqual(['agent', 'human', 'agent', 'human']);
+
+    // Deleting the project removes what Maestro recorded for it.
+    await app.inject({ method: 'DELETE', url: `/api/projects/${project.id}` });
+    expect(store.getRun(run.id)).toBeUndefined();
+    expect(store.listReviews(run.id)).toEqual([]);
+    expect(store.listEvents(run.id)).toEqual([]);
+    expect(store.listAlerts()).toEqual([]);
+    expect(store.spendByProject().size).toBe(0);
     await app.close();
   });
 

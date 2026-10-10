@@ -404,7 +404,7 @@ export class Orchestrator {
             cwd: ctx.worktree, model: store.getSetting('model.reviewer') || 'claude-opus-5-5', env: ctx.env, signal, maxBudgetUsd: this.budgetLeft(ctx),
             onMessage: (m) => m.kind === 'agent' && this.log(ctx.runId, 'agent', `Reviewer: ${m.text}`),
           },
-          project, wf, ticket, this.run(ctx).baseRef ?? wf.base_branch, readMemoryFile(ctx.worktree),
+          project, wf, ticket, this.run(ctx).baseRef ?? wf.base_branch, readMemoryFile(ctx.worktree), store.listReviews(ctx.runId),
         );
       } catch (e) {
         if (signal.aborted) throw e;

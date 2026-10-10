@@ -119,7 +119,13 @@ export class Store {
         p.context, p.requirements, p.bestPractices, p.workflowYaml, id);
     return p;
   }
+  /** Removes the project and everything Maestro recorded for it (the repository and PM tool are not touched). */
   deleteProject(id: string): void {
+    this.db.prepare('DELETE FROM run_events WHERE run_id IN (SELECT id FROM runs WHERE project_id = ?)').run(id);
+    this.db.prepare('DELETE FROM reviews WHERE run_id IN (SELECT id FROM runs WHERE project_id = ?)').run(id);
+    this.db.prepare('DELETE FROM runs WHERE project_id = ?').run(id);
+    this.db.prepare('DELETE FROM alerts WHERE project_id = ?').run(id);
+    this.db.prepare('DELETE FROM spend WHERE project_id = ?').run(id);
     this.db.prepare('DELETE FROM projects WHERE id = ?').run(id);
     this.db.prepare('DELETE FROM manual_tickets WHERE project_id = ?').run(id);
     this.db.prepare('DELETE FROM backlog_drafts WHERE project_id = ?').run(id);
