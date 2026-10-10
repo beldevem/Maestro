@@ -111,6 +111,31 @@ describe('auto-assign', () => {
     expect(store.getManualTicket(project.id, 'AUT-5')!.status).toBe('todo');
   });
 
+  it('never gives one worker two tickets when starts race', async () => {
+    for (const a of store.listAgents().slice(1)) store.deleteAgent(a.id);
+    const one = ticket('One', ['area:a']);
+    const two = ticket('Two', ['area:b']);
+    const results = await Promise.allSettled([orchestrator.start(project.id, one.key), orchestrator.start(project.id, two.key)]);
+    expect(results.map((r) => r.status).sort()).toEqual(['fulfilled', 'rejected']);
+    expect((results.find((r) => r.status === 'rejected') as PromiseRejectedResult).reason.message).toMatch(/No worker agent is available/);
+    expect(store.listRuns(project.id)).toHaveLength(1);
+  });
+
+  it('starts a ticket once when it is started twice at the same time', async () => {
+    const one = ticket('One', ['area:a']);
+    const results = await Promise.allSettled([orchestrator.start(project.id, one.key), orchestrator.start(project.id, one.key)]);
+    expect(results.map((r) => r.status).sort()).toEqual(['fulfilled', 'rejected']);
+    expect(store.listRuns(project.id)).toHaveLength(1);
+    expect(store.listAgents().filter((a) => a.state === 'available')).toHaveLength(2);
+  });
+
+  it('frees the worker when setting up the run fails', async () => {
+    store.updateProject(project.id, { codeHost: { provider: 'local', localPath: join(home, 'gone'), defaultBranch: 'main' } });
+    const one = ticket('One', ['area:a']);
+    await expect(orchestrator.start(project.id, one.key)).rejects.toThrow(/Folder not found/);
+    expect(store.listAgents().every((a) => a.state === 'available')).toBe(true);
+  });
+
   it('honours max_parallel and the global limit', async () => {
     store.setSetting('maxConcurrentRuns', '1');
     ticket('One', ['area:a']);

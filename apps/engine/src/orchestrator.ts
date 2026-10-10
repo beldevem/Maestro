@@ -65,6 +65,13 @@ export class Orchestrator {
   private ticking: Promise<Run[]> | null = null;
   private polling = false;
   private tickAgain = false;
+  /** Starts between their checks and their run existing: counted so concurrent starts can't share a worker or a slot. */
+  private readonly starting = new Set<string>();
+
+  /** Runs working now plus starts being set up. */
+  private busy(): number {
+    return this.active.size + this.starting.size;
+  }
 
   constructor(private readonly d: OrchestratorDeps) {}
 
@@ -90,17 +97,33 @@ export class Orchestrator {
     if (reasons.length && !opts.force) throw new NotReadyError(reasons);
     const budget = budgetState(store, projectId);
     if (budget.over) throw new Error(`${project.name} has reached its daily budget of ${usd(budget.cap)}. Raise it on the Runs tab or wait until tomorrow.`);
-    if (this.active.size >= this.maxConcurrent()) throw new Error(`Already running ${this.active.size} tickets, the limit in Settings.`);
-    if (store.listRuns(projectId).some((r) => r.ticketKey === ticketKey && r.status === 'running')) {
+
+    // From here to the reservation there is no await, so two starts can't both pass these checks.
+    const startKey = `${projectId}:${ticket.key}`;
+    if (this.busy() >= this.maxConcurrent()) throw new Error(`Already running ${this.busy()} tickets, the limit in Settings.`);
+    if (this.starting.has(startKey) || store.listRuns(projectId).some((r) => r.ticketKey === ticket.key && ['running', 'reviewing'].includes(r.status))) {
       throw new Error(`${ticketKey} is already being worked on.`);
     }
-
     const agent = opts.agentId
       ? store.getAgent(opts.agentId)
       : store.listAgents().find((a) => a.role === 'worker' && a.state === 'available');
     if (!agent) throw new Error('No worker agent is available. Add one on the Agents screen or wait for one to finish.');
     if (agent.state !== 'available') throw new Error(`${agent.name} is ${agent.state.replace('_', ' ')}.`);
+    this.starting.add(startKey);
+    this.setAgent(agent.id, 'working', null, `Preparing ${ticket.key}`);
+    try {
+      return await this.setUpRun(project, wf, pm, ticket, agent);
+    } catch (e) {
+      this.setAgent(agent.id, 'available', null, '');
+      throw e;
+    } finally {
+      this.starting.delete(startKey);
+    }
+  }
 
+  private async setUpRun(project: Project, wf: Workflow, pm: ReturnType<typeof pmFor>, ticket: Ticket, agent: Agent): Promise<Run> {
+    const { store } = this.d;
+    const projectId = project.id;
     const codeHost = this.host(project);
     const repoPath = await codeHost.ensureRepo(project);
     if (wf.pull_before_start) await codeHost.syncBase(repoPath, wf.base_branch, project);
@@ -185,8 +208,8 @@ export class Orchestrator {
       return [];
     }
 
-    const running = store.listRuns(project.id).filter((r) => r.status === 'running');
-    let slots = Math.min(max_parallel - running.length, this.maxConcurrent() - this.active.size, this.freeWorkers());
+    const running = store.listRuns(project.id).filter((r) => r.status === 'running' || r.status === 'reviewing');
+    let slots = Math.min(max_parallel - running.length, this.maxConcurrent() - this.busy(), this.freeWorkers());
     if (slots <= 0) return [];
 
     const tickets = await pmFor(project, store, this.d.secrets).listTickets();
@@ -207,7 +230,7 @@ export class Orchestrator {
         if (area) busyAreas.add(area);
       } catch (e) {
         console.error(`Auto-assign could not start ${ticket.key}: ${e instanceof Error ? e.message : String(e)}`);
-        if (this.freeWorkers() === 0 || this.active.size >= this.maxConcurrent()) break;
+        if (this.freeWorkers() === 0 || this.busy() >= this.maxConcurrent()) break;
       }
     }
     return started;
@@ -579,7 +602,7 @@ export class Orchestrator {
     const run = store.getRun(runId);
     if (!run || run.status !== 'in_review' || this.active.has(runId)) return false;
     const pending = store.pendingFeedback(runId);
-    if (!pending.length || this.active.size >= this.maxConcurrent()) return false;
+    if (!pending.length || this.busy() >= this.maxConcurrent()) return false;
     const workers = store.listAgents().filter((a) => a.role === 'worker' && a.state === 'available');
     const agent = workers.find((a) => a.id === run.agentId) ?? workers[0];
     if (!agent) return false;
