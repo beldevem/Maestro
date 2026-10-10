@@ -133,6 +133,7 @@ type Tab = 'board' | 'knowledge' | 'workflow' | 'runs' | 'chat' | 'connectors';
               <input type="number" min="0" step="1" [(ngModel)]="budgetText" name="budget" placeholder="Default from Settings" />
             </label>
             <button type="submit">Save budget</button>
+            <button type="button" class="quiet" (click)="cleanupWorktrees()" title="Remove the worktree folders of failed, stopped and done runs; branches stay">Remove finished worktrees</button>
             @if (spend(); as s) {
               <span class="meta">Spent today \${{ s.today | number: '1.2-2' }}{{ s.dailyCap > 0 ? ' of $' + (s.dailyCap | number: '1.0-2') : ', no limit' }} · 7 days \${{ s.last7Days | number: '1.2-2' }} · all time \${{ s.total | number: '1.2-2' }}</span>
             }
@@ -279,6 +280,11 @@ export class ProjectPage {
     const s = (await this.api.spend().catch(() => [])).find((x) => x.projectId === this.id()) ?? null;
     this.spend.set(s);
     this.budgetText = s?.ownCap ? s.dailyCap : null;
+  }
+
+  async cleanupWorktrees(): Promise<void> {
+    const { removed } = await this.api.cleanupWorktrees(this.id());
+    this.flash(removed ? `Removed ${removed} worktree${removed === 1 ? '' : 's'}; the branches stay.` : 'No finished worktrees to remove.');
   }
 
   async saveBudget(): Promise<void> {

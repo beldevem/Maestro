@@ -773,6 +773,30 @@ export class Orchestrator {
     await git(repoPath, ['worktree', 'remove', '--force', run.worktree]);
   }
 
+  /**
+   * Removes the worktrees of finished runs (failed, stopped, done) that ended more than `days` ago, or all of them with 0.
+   * Branches stay. Returns how many were removed.
+   */
+  async cleanupFinished(days = Number(this.d.store.getSetting('worktrees.keepDays') ?? 3), projectId?: string): Promise<number> {
+    const { store } = this.d;
+    if (days < 0) return 0;
+    const before = Date.now() - days * 86_400_000;
+    let removed = 0;
+    for (const run of store.listAllRuns(projectId)) {
+      if (!['failed', 'stopped', 'done'].includes(run.status) || !run.worktree || !existsSync(run.worktree)) continue;
+      if (run.endedAt && new Date(run.endedAt).getTime() > before) continue;
+      const project = store.getProject(run.projectId);
+      if (!project) continue;
+      try {
+        await this.cleanup(run, project);
+        removed += 1;
+      } catch (e) {
+        console.error(`Could not remove the worktree of ${run.ticketKey}: ${e instanceof Error ? e.message : String(e)}`);
+      }
+    }
+    return removed;
+  }
+
   /** On startup, runs that were in flight when the engine stopped can't resume. */
   recover(): void {
     for (const run of this.d.store.listAllRuns().filter((r) => r.status === 'running')) {

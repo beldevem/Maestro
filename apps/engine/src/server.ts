@@ -363,6 +363,9 @@ export async function buildServer(d: ServerDeps): Promise<FastifyInstance> {
     return { base, diff: parts.filter(Boolean).join('\n\n') };
   });
   app.post<{ Params: { id: string } }>('/api/runs/:id/stop', async (req) => ({ stopped: d.orchestrator.stop(req.params.id) }));
+  app.post<{ Params: { id: string } }>('/api/projects/:id/cleanup', async (req) => ({
+    removed: await d.orchestrator.cleanupFinished(0, project(req.params.id).id),
+  }));
   app.delete<{ Params: { id: string } }>('/api/runs/:id/worktree', async (req) => {
     const run = d.store.getRun(req.params.id);
     if (!run) throw Object.assign(new Error('Run not found.'), { statusCode: 404 });
@@ -495,6 +498,7 @@ export async function buildServer(d: ServerDeps): Promise<FastifyInstance> {
         maxConcurrentRuns: '3',
         'budget.perRunUsd': '5',
         'budget.projectDailyUsd': '0',
+        'worktrees.keepDays': '3',
         // Per-project values (auto-assign toggle, pending memory) have their own endpoints.
         ...Object.fromEntries(Object.entries(d.store.allSettings()).filter(([k]) => !/^(autoAssign|memory|budget\.daily)\./.test(k))),
       },

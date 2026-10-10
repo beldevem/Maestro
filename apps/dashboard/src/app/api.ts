@@ -56,6 +56,7 @@ export class Api {
   pollPullRequests = () => this.call('POST', '/pull-requests/poll', {});
   diff = (id: string) => this.call<{ base: string; diff: string }>('GET', `/runs/${id}/diff`);
   stopRun = (id: string) => this.call('POST', `/runs/${id}/stop`, {});
+  cleanupWorktrees = (projectId: string) => this.call<{ removed: number }>('POST', `/projects/${projectId}/cleanup`, {});
   removeWorktree = (id: string) => this.call('DELETE', `/runs/${id}/worktree`);
 
   agents = () => this.call<Agent[]>('GET', '/agents');

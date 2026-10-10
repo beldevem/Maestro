@@ -42,6 +42,7 @@ import type { SecretInfo } from '../models';
       <label>Reviewer model <input [(ngModel)]="settings['model.reviewer']" name="mr" /></label>
       <label>Tickets worked on at once <input type="number" min="1" [(ngModel)]="settings['maxConcurrentRuns']" name="mc" /></label>
       <label>Budget per run, USD <input type="number" min="0" step="0.5" [(ngModel)]="settings['budget.perRunUsd']" name="bud" /></label>
+      <label>Keep worktrees of finished runs, days (-1 = keep) <input type="number" min="-1" step="1" [(ngModel)]="settings['worktrees.keepDays']" name="keep" /></label>
       <label>Daily budget per project, USD (0 = no limit) <input type="number" min="0" step="1" [(ngModel)]="settings['budget.projectDailyUsd']" name="daily" /></label>
       <p class="hint">A run stops when it has spent its budget. When a project reaches its daily budget (set one per project on its Runs tab), nothing new starts and auto-assign pauses until tomorrow.</p>
       <button class="primary" type="submit">Save</button>

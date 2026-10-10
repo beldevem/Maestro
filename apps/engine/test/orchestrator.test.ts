@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -129,6 +129,20 @@ describe('worker run end to end on a local repo', () => {
     await expect(orchestrator.start(project.id, ticket.key)).rejects.toThrow(/Add a GitHub token in Settings first/);
     expect(agent.calls).toHaveLength(0);
     expect(store.listRuns(project.id)).toHaveLength(0);
+  });
+
+  it('removes worktrees of finished runs after the keep period, keeping branches', async () => {
+    const { orchestrator, project } = setup(new FakeAgent(true));
+    const ticket = store.createManualTicket(project.id, 'DEM', { title: 'Say hello', description: '', acceptanceCriteria: 'x', labels: [] });
+    const run = await orchestrator.start(project.id, ticket.key);
+    await waitFor(() => settled(store.getRun(run.id)!.status));
+    store.updateRun(run.id, { status: 'failed' });
+    expect(await orchestrator.cleanupFinished(3)).toBe(0);
+    expect(existsSync(run.worktree)).toBe(true);
+    store.updateRun(run.id, { endedAt: new Date(Date.now() - 4 * 86_400_000).toISOString() });
+    expect(await orchestrator.cleanupFinished(3)).toBe(1);
+    expect(existsSync(run.worktree)).toBe(false);
+    expect(await git(repo, ['branch', '--list', run.branch])).toContain(run.branch);
   });
 
   it('blocks the agent when the gate keeps failing', async () => {

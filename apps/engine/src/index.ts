@@ -32,3 +32,6 @@ setInterval(() => void orchestrator.tick(), 15_000);
 void orchestrator.tick();
 // No webhooks on a local machine: poll open pull requests for reviews, CI checks and merges.
 setInterval(() => void orchestrator.pollPullRequests(), 60_000);
+// Worktrees of finished runs (each may hold its own node_modules) go after worktrees.keepDays (default 3; -1 keeps them).
+setInterval(() => void orchestrator.cleanupFinished(), 3_600_000);
+void orchestrator.cleanupFinished();
