@@ -98,5 +98,8 @@ The engine tests run a whole worker run on a temporary git repo with a stand-in 
 
 - Agents only work inside their ticket's worktree. Every tool not on the allowlist is refused: file tools, the project's gate commands and `allowed_commands` are allowed.
 - Agents never commit, push or merge. The engine commits after the gates pass and opens draft PRs only.
-- Tokens are never sent to the dashboard. The GitHub token is passed per git command, not written into remotes.
-- The engine listens on 127.0.0.1 only.
+- Tokens are never sent to the dashboard. Code host credentials are passed per git command, not written into remotes.
+- The engine listens on 127.0.0.1 only, answers only to localhost host names (so a web page can't reach it through DNS rebinding), and refuses writes whose Origin is another site. Set `MAESTRO_ALLOWED_HOSTS` to add a host name.
+- The live event stream is same-origin only, so other web pages can't read agent activity.
+- Planner, reviewer and chat agents are read-only. Quality gates can run in a Docker container (`sandbox.type: docker`).
+- Budgets cap what a run and a project can spend in a day.

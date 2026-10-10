@@ -70,9 +70,42 @@ const agentSchema = z.object({
   model: z.string().default(''),
 });
 
+/** Host names the engine answers to: this machine, plus any listed in MAESTRO_ALLOWED_HOSTS (comma separated). */
+export function allowedHosts(): Set<string> {
+  const extra = (process.env.MAESTRO_ALLOWED_HOSTS ?? '').split(',').map((h) => h.trim().toLowerCase()).filter(Boolean);
+  return new Set(['localhost', '127.0.0.1', '[::1]', '::1', ...extra]);
+}
+
+function hostnameOf(hostHeader: string | undefined): string {
+  if (!hostHeader) return '';
+  const h = hostHeader.trim().toLowerCase();
+  return h.startsWith('[') ? h.slice(0, h.indexOf(']') + 1) : h.split(':')[0];
+}
+
 export async function buildServer(d: ServerDeps): Promise<FastifyInstance> {
   const app = Fastify({ logger: false });
   await app.register(cors, { origin: [/^http:\/\/localhost:\d+$/, /^http:\/\/127\.0\.0\.1:\d+$/] });
+
+  // The engine can run commands on this machine, so only this machine may drive it:
+  // a foreign Host header means DNS rebinding, and a foreign Origin on a write means another site posting here.
+  const hosts = allowedHosts();
+  app.addHook('onRequest', async (req, reply) => {
+    if (!hosts.has(hostnameOf(req.headers.host))) {
+      return reply.status(403).send({ error: 'Maestro only answers on this machine (set MAESTRO_ALLOWED_HOSTS to allow another host name).' });
+    }
+    const origin = req.headers.origin;
+    if (origin && !['GET', 'HEAD', 'OPTIONS'].includes(req.method)) {
+      let originHost = '';
+      try {
+        originHost = new URL(origin).hostname.toLowerCase();
+      } catch {
+        // Unparsable origins (including "null") are refused below.
+      }
+      if (!hosts.has(originHost) && !hosts.has(`[${originHost}]`)) {
+        return reply.status(403).send({ error: 'Requests from other sites are not allowed.' });
+      }
+    }
+  });
 
   app.setErrorHandler((err, _req, reply) => {
     if (err instanceof z.ZodError) return reply.status(400).send({ error: err.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; ') });
