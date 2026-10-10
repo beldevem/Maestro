@@ -135,9 +135,14 @@ export async function buildServer(d: ServerDeps): Promise<FastifyInstance> {
     planning.add(p.id);
     try {
       const tickets = await pmFor(p, d.store, d.secrets).listTickets();
-      const cwd = existsSync(repoDir(p)) ? repoDir(p) : tmpdir();
+      // Planning reads the code, so a remote repository is cloned first; without it the planner works from the requirements alone.
+      const repo = await codeHostFor(p, d.secrets, d.reposDir).ensureRepo(p).catch((e: Error) => {
+        console.error(`Planning ${p.name} without the code: ${e.message}`);
+        return '';
+      });
+      const cwd = repo && existsSync(repo) ? repo : tmpdir();
       const docs = await docsContextFor(p, d.secrets);
-      const memory = existsSync(repoDir(p)) ? await readBaseMemory(repoDir(p), parseWorkflow(p.workflowYaml).base_branch) : '';
+      const memory = repo ? await readBaseMemory(repo, parseWorkflow(p.workflowYaml).base_branch) : '';
       const draft = await draftBacklog(d, p, tickets, cwd, { docs, memory });
       d.store.addSpend(p.id, null, 'planner', draft.costUsd);
       return draft;
