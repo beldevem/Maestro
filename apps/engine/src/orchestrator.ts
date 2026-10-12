@@ -14,7 +14,8 @@ import { runGates, type GateResult } from './gates.js';
 import { appendLearnings, extractLearnings, MEMORY_FILE, readMemoryFile, writeMemoryFile } from './memory.js';
 import { git } from './proc.js';
 import type { SecretStore } from './secrets.js';
-import { budgetState, perRunCap, startOfToday, usd } from './budget.js';
+import { budgetState, overCaps, perRunCaps, startOfToday } from './budget.js';
+import { addUsage, toEur, totalTokens, type Usage } from './usage.js';
 import { numberSetting } from './settings.js';
 import { chooseModel } from './agents/providers/config.js';
 import type { Agent, AgentState, AlertKind, Project, Review, ReviewComment, Run, RunEventKind, SpendKind, Ticket } from './types.js';
@@ -104,7 +105,7 @@ export class Orchestrator {
       if (missing) throw new Error(missing);
     }
     const budget = budgetState(store, projectId);
-    if (budget.over) throw new Error(`${project.name} has reached its daily budget of ${usd(budget.cap)}. Raise it on the Runs tab or wait until tomorrow.`);
+    if (budget.over) throw new Error(`${project.name} has reached its daily budget of ${budget.over}. Raise it on the Runs tab or wait until tomorrow.`);
 
     // From here to the reservation there is no await, so two starts can't both pass these checks.
     const startKey = `${projectId}:${ticket.key}`;
@@ -212,7 +213,7 @@ export class Orchestrator {
     const budget = budgetState(store, project.id);
     if (budget.over) {
       if (!store.hasAlertSince(project.id, 'budget', startOfToday())) {
-        this.alert(project.id, null, 'budget', `${project.name} reached its daily budget of ${usd(budget.cap)}; auto-assign is paused until tomorrow.`);
+        this.alert(project.id, null, 'budget', `${project.name} reached its daily budget of ${budget.over}; auto-assign is paused until tomorrow.`);
       }
       return [];
     }
@@ -375,14 +376,14 @@ export class Orchestrator {
         resume: this.run(ctx).sessionId ?? undefined,
         env: ctx.env,
         signal,
-        maxBudgetUsd: this.budgetLeft(ctx),
+        ...this.budgetLeft(ctx),
         onMessage: (m) => this.log(ctx.runId, m.kind === 'tool' ? 'tool' : 'agent', m.text),
       });
-      this.addCost(ctx, outcome.costUsd);
+      this.addCost(ctx, outcome.costUsd, outcome.usage);
       if (signal.aborted) throw new Error('aborted');
       if (outcome.sessionId) store.updateRun(ctx.runId, { sessionId: outcome.sessionId });
       // Hitting a limit is recoverable (raise the budget, or give guidance and it continues), so it blocks rather than fails.
-      if (!outcome.ok && /error_max_budget_usd/.test(outcome.error ?? '')) {
+      if (!outcome.ok && /error_max_budget_(usd|tokens)/.test(outcome.error ?? '')) {
         this.block(ctx, this.budgetStop(ctx) ?? 'The agent stopped at its budget for this step.', `Budget reached on ${ticket.key}`, 'budget');
         return null;
       }
@@ -477,18 +478,18 @@ export class Orchestrator {
           this.d.agent,
           {
             ...chooseModel(store, 'reviewer', { projectId: project.id }),
-            cwd: ctx.worktree, env: ctx.env, signal, maxBudgetUsd: this.budgetLeft(ctx),
+            cwd: ctx.worktree, env: ctx.env, signal, ...this.budgetLeft(ctx),
             onMessage: (m) => m.kind === 'agent' && this.log(ctx.runId, 'agent', `Reviewer: ${m.text}`),
           },
           project, wf, ticket, this.run(ctx).baseRef ?? wf.base_branch, readMemoryFile(ctx.worktree), store.listReviews(ctx.runId),
         );
       } catch (e) {
         if (signal.aborted) throw e;
-        this.addCost(ctx, (e as { costUsd?: number }).costUsd ?? 0, 'reviewer');
+        this.addCost(ctx, (e as { costUsd?: number }).costUsd ?? 0, (e as { usage?: Usage | null }).usage ?? null, 'reviewer');
         this.log(ctx.runId, 'error', `The reviewer agent failed, so this waits for your review: ${(e as Error).message}`);
         return this.toInReview(ctx);
       }
-      this.addCost(ctx, result.costUsd, 'reviewer');
+      this.addCost(ctx, result.costUsd, result.usage, 'reviewer');
       const review = store.addReview({
         runId: ctx.runId, source: 'agent', verdict: result.verdict, summary: result.summary, comments: result.comments,
         costUsd: result.costUsd, addressed: result.verdict === 'approve',
@@ -578,27 +579,35 @@ export class Orchestrator {
     return this.d.store.getRun(ctx.runId)!;
   }
 
-  private addCost(ctx: RunCtx, amount: number, kind: SpendKind = 'worker'): void {
-    if (!amount) return;
-    this.d.store.updateRun(ctx.runId, { costUsd: this.run(ctx).costUsd + amount });
-    this.d.store.addSpend(ctx.project.id, ctx.runId, kind, amount);
+  private addCost(ctx: RunCtx, amount: number, usage: Usage | null | undefined, kind: SpendKind = 'worker'): void {
+    if (!amount && !usage) return;
+    const run = this.run(ctx);
+    this.d.store.updateRun(ctx.runId, { costUsd: run.costUsd + amount, usage: addUsage(run.usage, usage) });
+    this.d.store.addSpend(ctx.project.id, ctx.runId, kind, amount, usage ?? null);
   }
 
   /** Why the run must not spend more, or null. */
   private budgetStop(ctx: RunCtx): string | null {
-    const perRun = perRunCap(this.d.store);
-    const spent = this.run(ctx).costUsd;
-    if (perRun > 0 && spent >= perRun) return `This run reached its budget of ${usd(perRun)} (Settings).`;
+    const run = this.run(ctx);
+    const perRun = overCaps(this.d.store, perRunCaps(this.d.store), run.usage, run.costUsd);
+    if (perRun) return `This run reached its budget of ${perRun} (Settings).`;
     const daily = budgetState(this.d.store, ctx.project.id);
-    if (daily.over) return `${ctx.project.name} reached its daily budget of ${usd(daily.cap)}.`;
+    if (daily.over) return `${ctx.project.name} reached its daily budget of ${daily.over}.`;
     return null;
   }
 
-  /** What the next agent call may spend: the smaller of what is left for the run and for the project today. */
-  private budgetLeft(ctx: RunCtx): number | undefined {
-    const perRun = perRunCap(this.d.store);
-    const left = Math.min(perRun > 0 ? perRun - this.run(ctx).costUsd : Infinity, budgetState(this.d.store, ctx.project.id).remaining);
-    return Number.isFinite(left) ? Math.max(0.01, left) : undefined;
+  /** What the next agent call may spend, in tokens and USD: the smaller of what is left for the run and for the project today. */
+  private budgetLeft(ctx: RunCtx): { maxTokens?: number; maxBudgetUsd?: number } {
+    const run = this.run(ctx);
+    const caps = perRunCaps(this.d.store);
+    const daily = budgetState(this.d.store, ctx.project.id);
+    const rate = toEur(this.d.store, 1);
+    const tokens = Math.min(caps.tokens > 0 ? caps.tokens - totalTokens(run.usage) : Infinity, daily.tokensLeft);
+    const usd = Math.min(caps.eur > 0 && rate > 0 ? caps.eur / rate - run.costUsd : Infinity, daily.usdLeft);
+    return {
+      ...(Number.isFinite(tokens) ? { maxTokens: Math.max(1, Math.floor(tokens)) } : {}),
+      ...(Number.isFinite(usd) ? { maxBudgetUsd: Math.max(0.01, usd) } : {}),
+    };
   }
 
   private alert(projectId: string | null, runId: string | null, kind: AlertKind, message: string): void {

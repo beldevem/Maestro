@@ -15,15 +15,16 @@ const GATE = `quality_gates:
     run: node -e "process.exit(require('fs').readFileSync('hello.txt','utf8').trim()==='hello'?0:1)"
 `;
 
-/** Writes the wrong greeting first and the right one when asked to fix; each call costs `cost`. */
+/** Writes the wrong greeting first and the right one when asked to fix; each call costs `cost` USD and `tokens` input tokens. */
 class CostlyAgent implements CodingAgent {
   tasks: AgentTask[] = [];
-  constructor(private readonly cost: number, private readonly ok = true) {}
+  constructor(private readonly cost: number, private readonly ok = true, private readonly tokens = 0) {}
   async run(task: AgentTask): Promise<AgentOutcome> {
     this.tasks.push(task);
-    if (task.outputSchema) return { sessionId: 'r', text: '', costUsd: this.cost, ok: true, structured: { verdict: 'approve', summary: '', comments: [] } };
+    const usage = this.tokens ? { input: this.tokens, output: 0, cache: 0 } : null;
+    if (task.outputSchema) return { sessionId: 'r', text: '', costUsd: this.cost, usage, ok: true, structured: { verdict: 'approve', summary: '', comments: [] } };
     writeFileSync(join(task.cwd, 'hello.txt'), task.prompt.includes('quality gate failed') ? 'hello\n' : 'helo\n');
-    return this.ok ? { sessionId: 's', text: 'Done', costUsd: this.cost, ok: true } : { sessionId: 's', text: '', costUsd: this.cost, ok: false, error: 'API overloaded' };
+    return this.ok ? { sessionId: 's', text: 'Done', costUsd: this.cost, usage, ok: true } : { sessionId: 's', text: '', costUsd: this.cost, usage, ok: false, error: 'API overloaded' };
   }
 }
 
@@ -55,47 +56,62 @@ async function setup(agent: CodingAgent, workflow = `pull_before_start: false\n$
 }
 
 describe('budgets', () => {
-  it('passes what is left of the run budget to each call, and skips the reviewer once it is spent', async () => {
-    const agent = new CostlyAgent(0.6);
+  it('passes the tokens left in the run budget to each call, and skips the reviewer once they are used', async () => {
+    const agent = new CostlyAgent(0, true, 600_000);
     const { store, orchestrator, p, ticket, finish } = await setup(agent);
-    store.setSetting('budget.perRunUsd', '1');
+    store.setSetting('budget.perRunTokens', '1000000');
     const run = await finish((await orchestrator.start(p.id, ticket().key)).id);
     expect(run.status).toBe('in_review');
-    expect(agent.tasks.map((t) => t.maxBudgetUsd)).toEqual([1, 0.4]);
+    expect(agent.tasks.map((t) => t.maxTokens)).toEqual([1_000_000, 400_000]);
     expect(agent.tasks.some((t) => t.outputSchema)).toBe(false);
     expect(store.listEvents(run.id).some((e) => e.message.includes('Skipping the reviewer agent'))).toBe(true);
-    expect(store.spendSince(p.id, startOfToday())).toBeCloseTo(1.2);
+    expect(run.usage).toEqual({ input: 1_200_000, output: 0, cache: 0 });
+    expect(store.spendSince(p.id, startOfToday())).toEqual({ usd: 0, usage: { input: 1_200_000, output: 0, cache: 0 } });
   });
 
-  it('blocks a run that has spent its budget before it is finished', async () => {
+  it('turns an optional euro cap into the USD left for each call', async () => {
     const agent = new CostlyAgent(0.6);
     const { store, orchestrator, p, ticket, finish } = await setup(agent);
-    store.setSetting('budget.perRunUsd', '0.5');
-    const run = await finish((await orchestrator.start(p.id, ticket().key)).id);
-    expect(run.status).toBe('blocked');
-    expect(run.error).toBe('This run reached its budget of $0.50 (Settings).');
-    expect(agent.tasks).toHaveLength(1);
-    expect(store.listAlerts().map((a) => a.kind)).toEqual(['budget']);
+    store.setSetting('currency.eurPerUsd', '0.9');
+    store.setSetting('budget.perRunEur', '0.9');
+    await finish((await orchestrator.start(p.id, ticket().key)).id);
+    expect(agent.tasks[0].maxBudgetUsd).toBeCloseTo(1);
+    expect(agent.tasks[1].maxBudgetUsd).toBeCloseTo(0.4);
   });
 
-  it('stops new work and pauses auto-assign at the daily cap, with one alert a day', async () => {
+  it('blocks a run at whichever cap it reaches first', async () => {
+    const tokens = await setup(new CostlyAgent(0, true, 600_000));
+    tokens.store.setSetting('budget.perRunTokens', '500000');
+    const r1 = await tokens.finish((await tokens.orchestrator.start(tokens.p.id, tokens.ticket().key)).id);
+    expect(r1.status).toBe('blocked');
+    expect(r1.error).toBe('This run reached its budget of 500k tokens (Settings).');
+    expect(tokens.store.listAlerts().map((a) => a.kind)).toEqual(['budget']);
+
+    const euros = await setup(new CostlyAgent(0.6));
+    euros.store.setSetting('budget.perRunEur', '0.45');
+    const r2 = await euros.finish((await euros.orchestrator.start(euros.p.id, euros.ticket().key)).id);
+    expect(r2.status).toBe('blocked');
+    expect(r2.error).toBe('This run reached its budget of ≈ €0.45 (Settings).');
+  });
+
+  it('stops new work and pauses auto-assign at the daily token cap, with one alert a day', async () => {
     const { app, store, orchestrator, p, ticket } = await setup(new CostlyAgent(0.1), `pull_before_start: false\nquality_gates: []\norchestration:\n  auto_assign: true\n`);
     const t = ticket();
-    store.addSpend(p.id, null, 'planner', 2.5);
-    await app.inject({ method: 'PUT', url: `/api/projects/${p.id}/budget`, payload: { dailyUsd: 2 } });
-    expect(budgetState(store, p.id)).toMatchObject({ spentToday: 2.5, cap: 2, remaining: 0, over: true });
+    store.addSpend(p.id, null, 'planner', 0, { input: 4000, output: 1000, cache: 0 });
+    await app.inject({ method: 'PUT', url: `/api/projects/${p.id}/budget`, payload: { dailyTokens: 5000 } });
+    expect(budgetState(store, p.id)).toMatchObject({ caps: { tokens: 5000, eur: 0 }, tokensLeft: 0, over: '5k tokens' });
 
-    await expect(orchestrator.start(p.id, t.key)).rejects.toThrow(/daily budget of \$2.00/);
+    await expect(orchestrator.start(p.id, t.key)).rejects.toThrow(/daily budget of 5k tokens/);
     expect(await orchestrator.tick()).toEqual([]);
     expect(await orchestrator.tick()).toEqual([]);
     expect(store.listAlerts().filter((a) => a.kind === 'budget')).toHaveLength(1);
     expect((await app.inject({ method: 'POST', url: `/api/projects/${p.id}/plan` })).json().error).toMatch(/daily budget/);
 
     const spend = (await app.inject({ method: 'GET', url: '/api/spend' })).json();
-    expect(spend[0]).toMatchObject({ name: 'Budgeted', today: 2.5, dailyCap: 2, ownCap: true });
+    expect(spend[0]).toMatchObject({ name: 'Budgeted', today: { usd: 0, usage: { input: 4000, output: 1000, cache: 0 } }, dailyCaps: { tokens: 5000 }, own: { tokens: '5000', eur: null } });
 
-    await app.inject({ method: 'PUT', url: `/api/projects/${p.id}/budget`, payload: { dailyUsd: null } });
-    expect(budgetState(store, p.id).over).toBe(false);
+    await app.inject({ method: 'PUT', url: `/api/projects/${p.id}/budget`, payload: { dailyTokens: null } });
+    expect(budgetState(store, p.id).over).toBeNull();
     await app.close();
   });
 
@@ -105,11 +121,13 @@ describe('budgets', () => {
         return { sessionId: 's1', text: '', costUsd: 0.2, ok: false, error };
       },
     });
-    const budget = await setup(limit('Agent stopped: error_max_budget_usd'));
-    const r1 = await budget.finish((await budget.orchestrator.start(budget.p.id, budget.ticket().key)).id);
-    expect(r1.status).toBe('blocked');
-    expect(r1.sessionId).toBe('s1');
-    expect(budget.store.listAlerts()[0].kind).toBe('budget');
+    for (const error of ['Agent stopped: error_max_budget_usd', 'Agent stopped: error_max_budget_tokens']) {
+      const budget = await setup(limit(error));
+      const r1 = await budget.finish((await budget.orchestrator.start(budget.p.id, budget.ticket().key)).id);
+      expect(r1.status).toBe('blocked');
+      expect(r1.sessionId).toBe('s1');
+      expect(budget.store.listAlerts()[0].kind).toBe('budget');
+    }
 
     const turns = await setup(limit('Agent stopped: error_max_turns'));
     const r2 = await turns.finish((await turns.orchestrator.start(turns.p.id, turns.ticket().key)).id);
@@ -117,11 +135,15 @@ describe('budgets', () => {
     expect(r2.error).toMatch(/used all its turns/);
   });
 
-  it('applies the default daily cap to projects without their own', async () => {
+  it('applies the default daily caps to projects without their own', async () => {
     const { store, p } = await setup(new CostlyAgent(0));
-    store.setSetting('budget.projectDailyUsd', '1');
-    store.addSpend(p.id, null, 'chat', 1);
-    expect(budgetState(store, p.id).over).toBe(true);
+    store.setSetting('budget.projectDailyTokens', '100');
+    store.addSpend(p.id, null, 'chat', 0, { input: 80, output: 30, cache: 0 });
+    expect(budgetState(store, p.id).over).toBe('100 tokens');
+    store.setSetting('budget.projectDailyTokens', '0');
+    store.setSetting('budget.projectDailyEur', '1');
+    store.addSpend(p.id, null, 'chat', 1.2);
+    expect(budgetState(store, p.id).over).toBe('≈ €1.00');
   });
 });
 

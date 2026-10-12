@@ -6,6 +6,7 @@ import type { AgentOutcome, AgentTask, CodingAgent } from '../coding-agent.js';
 import type { ProviderConfig } from './config.js';
 import { parseAllowed, runTool, toolDefinitions } from './tools.js';
 import { httpFetch, modelFetch } from '../../http.js';
+import { addUsage as sumUsage, totalTokens, usageFromOpenAI, type Usage } from '../../usage.js';
 
 interface Message {
   role: 'system' | 'user' | 'assistant' | 'tool';
@@ -16,7 +17,7 @@ interface Message {
 
 interface Completion {
   choices: { message: Message; finish_reason?: string }[];
-  usage?: { prompt_tokens?: number; completion_tokens?: number };
+  usage?: { prompt_tokens?: number; completion_tokens?: number; prompt_tokens_details?: { cached_tokens?: number } };
 }
 
 const LOOP_RULES = `
@@ -137,8 +138,10 @@ export class OpenAICompatibleAgent implements CodingAgent {
 
     const p = this.price(task.model);
     let cost = 0;
+    let usage: Usage | null = null;
     const addUsage = (u?: Completion['usage']) => {
       cost += ((u?.prompt_tokens ?? 0) * p.input + (u?.completion_tokens ?? 0) * p.output) / 1_000_000;
+      usage = sumUsage(usage, usageFromOpenAI(u));
     };
     const save = () => writeFileSync(file, JSON.stringify(history));
     const format = (): Record<string, unknown> =>
@@ -149,7 +152,7 @@ export class OpenAICompatibleAgent implements CodingAgent {
     const maxTurns = task.maxTurns ?? 80;
     const out = (o: Partial<AgentOutcome>): AgentOutcome => {
       save();
-      return { sessionId, text: '', costUsd: cost, ok: false, ...o };
+      return { sessionId, text: '', costUsd: cost, usage, ok: false, ...o };
     };
 
     try {
@@ -158,6 +161,7 @@ export class OpenAICompatibleAgent implements CodingAgent {
         if (task.signal?.aborted) return out({ error: 'aborted' });
         if (turn >= maxTurns) return out({ error: 'Agent stopped: error_max_turns' });
         if (task.maxBudgetUsd && cost >= task.maxBudgetUsd) return out({ error: 'Agent stopped: error_max_budget_usd' });
+        if (task.maxTokens && totalTokens(usage) >= task.maxTokens) return out({ error: 'Agent stopped: error_max_budget_tokens' });
         // Without tools the answer comes in one go, so JSON mode can be asked for right away.
         const res = await this.complete(
           { model: task.model, messages: [system, ...history], ...(tools.length ? { tools, tool_choice: 'auto' } : format()) },
@@ -207,7 +211,7 @@ export class OpenAICompatibleAgent implements CodingAgent {
         }
       }
       save();
-      return { sessionId, text, costUsd: cost, ok: true, ...(structured !== undefined ? { structured } : {}) };
+      return { sessionId, text, costUsd: cost, usage, ok: true, ...(structured !== undefined ? { structured } : {}) };
     } catch (e) {
       if (task.signal?.aborted) return out({ error: 'aborted' });
       return out({ error: e instanceof Error ? e.message : String(e) });

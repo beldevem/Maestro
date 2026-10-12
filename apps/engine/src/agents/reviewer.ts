@@ -3,6 +3,7 @@ import type { Project, Review, ReviewComment, ReviewVerdict, Ticket } from '../t
 import type { Workflow } from '../workflow.js';
 import type { AgentTask, CodingAgent } from './coding-agent.js';
 import { projectKnowledge } from './prompts.js';
+import type { Usage } from '../usage.js';
 
 const verdictSchema = z.object({
   verdict: z.preprocess((v) => (v === 'request_changes' ? 'changes_requested' : v), z.enum(['approve', 'changes_requested'])),
@@ -84,10 +85,11 @@ export interface ReviewResult {
   summary: string;
   comments: ReviewComment[];
   costUsd: number;
+  usage: Usage | null;
 }
 
 /** Reads the verdict from structured output, or from the first ```json block of the text. */
-export function parseVerdict(structured: unknown, text: string): Omit<ReviewResult, 'costUsd'> {
+export function parseVerdict(structured: unknown, text: string): Omit<ReviewResult, 'costUsd' | 'usage'> {
   let data = structured;
   if (data === undefined || data === null) {
     const block = /```json\s*\n([\s\S]*?)```/i.exec(text);
@@ -99,7 +101,7 @@ export function parseVerdict(structured: unknown, text: string): Omit<ReviewResu
 
 export async function runReviewer(
   agent: CodingAgent,
-  task: Pick<AgentTask, 'provider' | 'cwd' | 'model' | 'env' | 'signal' | 'onMessage' | 'maxBudgetUsd'>,
+  task: Pick<AgentTask, 'provider' | 'cwd' | 'model' | 'env' | 'signal' | 'onMessage' | 'maxBudgetUsd' | 'maxTokens'>,
   project: Project,
   wf: Workflow,
   ticket: Ticket,
@@ -115,6 +117,6 @@ export async function runReviewer(
     maxTurns: 40,
     outputSchema: REVIEW_JSON_SCHEMA,
   });
-  if (!out.ok) throw Object.assign(new Error(out.error ?? 'The reviewer stopped without a verdict.'), { costUsd: out.costUsd });
-  return { ...parseVerdict(out.structured, out.text), costUsd: out.costUsd };
+  if (!out.ok) throw Object.assign(new Error(out.error ?? 'The reviewer stopped without a verdict.'), { costUsd: out.costUsd, usage: out.usage ?? null });
+  return { ...parseVerdict(out.structured, out.text), costUsd: out.costUsd, usage: out.usage ?? null };
 }

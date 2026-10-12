@@ -17,11 +17,13 @@ import type { Store } from './db.js';
 import { bus, type BusEvent } from './events.js';
 import { NotReadyError, Orchestrator } from './orchestrator.js';
 import { git } from './proc.js';
-import { budgetState, dailyCap, perRunCap, startOfToday, usd } from './budget.js';
+import { budgetState, dailyCaps, perRunCaps, startOfToday } from './budget.js';
+import type { Spent } from './db.js';
+import { addUsage, eurPerUsd } from './usage.js';
 import { DESIGN_DIR } from './adapters/design/index.js';
 import { readBaseMemory } from './memory.js';
 import { testConnection } from './connection-tests.js';
-import { invalidSetting } from './settings.js';
+import { invalidSetting, NUMBER_SETTINGS } from './settings.js';
 import { CLI_PRESETS, cliInstalled } from './agents/providers/cli.js';
 import { chooseModel, getProvider, listProviders, projectRoles, providerSchema, ROLES, saveProviders, type ProviderConfig } from './agents/providers/config.js';
 import { listModels } from './agents/providers/openai.js';
@@ -80,6 +82,17 @@ const agentSchema = z.object({
   role: z.enum(['worker', 'orchestrator', 'reviewer', 'planner', 'assistant']).default('worker'),
   model: z.string().default(''),
 });
+
+const NONE: Spent = { usd: 0, usage: null };
+function sumSpent(values: Iterable<Spent>): Spent {
+  let usd = 0;
+  const usages = [];
+  for (const v of values) {
+    usd += v.usd;
+    usages.push(v.usage);
+  }
+  return { usd, usage: addUsage(...usages) };
+}
 
 /** Host names the engine answers to: this machine, plus any listed in MAESTRO_ALLOWED_HOSTS (comma separated). */
 export function allowedHosts(): Set<string> {
@@ -144,7 +157,7 @@ export async function buildServer(d: ServerDeps): Promise<FastifyInstance> {
   const plan = async (p: ReturnType<typeof project>) => {
     if (planning.has(p.id)) throw Object.assign(new Error('The planner is already working on this project.'), { statusCode: 409 });
     const budget = budgetState(d.store, p.id);
-    if (budget.over) throw new Error(`${p.name} has reached its daily budget of ${usd(budget.cap)}.`);
+    if (budget.over) throw new Error(`${p.name} has reached its daily budget of ${budget.over}.`);
     planning.add(p.id);
     try {
       const tickets = await pmFor(p, d.store, d.secrets).listTickets();
@@ -157,7 +170,7 @@ export async function buildServer(d: ServerDeps): Promise<FastifyInstance> {
       const docs = await docsContextFor(p, d.secrets);
       const memory = repo ? await readBaseMemory(repo, parseWorkflow(p.workflowYaml).base_branch, p.codeHost.provider === 'local') : '';
       const draft = await draftBacklog(d, p, tickets, cwd, { docs, memory });
-      d.store.addSpend(p.id, null, 'planner', draft.costUsd);
+      d.store.addSpend(p.id, null, 'planner', draft.costUsd, draft.usage);
       return draft;
     } finally {
       planning.delete(p.id);
@@ -479,11 +492,11 @@ export async function buildServer(d: ServerDeps): Promise<FastifyInstance> {
     const history = d.store.listChat(p.id, 20).map(({ role, content }) => ({ role, content }));
     const tickets = await pmFor(p, d.store, d.secrets).listTickets().catch(() => []);
     const reply = await askAssistant(d, p, tickets, repoDir(p), history, message);
-    d.store.addSpend(p.id, null, 'chat', reply.costUsd);
+    d.store.addSpend(p.id, null, 'chat', reply.costUsd, reply.usage);
     d.store.addChatMessage(p.id, 'user', message);
     const answer = d.store.addChatMessage(p.id, 'assistant', reply.answer, reply.model);
     answer.actions = reply.actions.map((action) => d.store.addChatAction(p.id, answer.id, { type: action.type, summary: describeAction(action), action }));
-    return { ...answer, answer: reply.answer, costUsd: reply.costUsd };
+    return { ...answer, answer: reply.answer, costUsd: reply.costUsd, usage: reply.usage };
   });
   app.post<{ Params: { id: string; actionId: string } }>('/api/projects/:id/chat/actions/:actionId', async (req) => {
     const p = project(req.params.id);
@@ -562,11 +575,12 @@ export async function buildServer(d: ServerDeps): Promise<FastifyInstance> {
       d.store.listProjects().map(async (p) => ({ project: p, tickets: await pmFor(p, d.store, d.secrets).listTickets().catch(() => []) })),
     );
     const reply = await askGlobalAssistant(d, digests, scope, scope ? repoDir(scope) : '', history, message, chatChoice() ?? undefined);
-    if (scope) d.store.addSpend(scope.id, null, 'chat', reply.costUsd);
+    // Questions across all projects count toward the overall spend, not a project's budget.
+    d.store.addSpend(scope ? scope.id : GLOBAL, null, 'chat', reply.costUsd, reply.usage);
     d.store.addChatMessage(GLOBAL, 'user', message);
     const answer = d.store.addChatMessage(GLOBAL, 'assistant', reply.answer, reply.model);
     answer.actions = reply.actions.map((action) => d.store.addChatAction(GLOBAL, answer.id, { type: action.type, summary: describeAction(action), action }));
-    return { ...answer, answer: reply.answer, costUsd: reply.costUsd };
+    return { ...answer, answer: reply.answer, costUsd: reply.costUsd, usage: reply.usage };
   });
   app.post<{ Params: { actionId: string } }>('/api/chat/actions/:actionId', async (req) => {
     const stored = d.store.getChatAction(GLOBAL, req.params.actionId);
@@ -612,14 +626,14 @@ export async function buildServer(d: ServerDeps): Promise<FastifyInstance> {
           running: mine.filter((r) => ['running', 'reviewing'].includes(r.status)).length,
           inReview: mine.filter((r) => r.status === 'in_review').length,
           blocked: mine.filter((r) => r.status === 'blocked').length,
-          spendToday: spendToday.get(p.id) ?? 0, dailyCap: dailyCap(d.store, p.id),
+          spendToday: spendToday.get(p.id) ?? NONE, dailyCaps: dailyCaps(d.store, p.id),
           autoAssign: d.orchestrator.autoAssignEnabled(p),
         };
       }),
     );
     const brief = (r: (typeof runs)[number]) => ({
       runId: r.id, projectId: r.projectId, projectName: names.get(r.projectId) ?? 'Removed project', ticketKey: r.ticketKey,
-      ticketTitle: r.ticketTitle, status: r.status, prUrl: r.prUrl, checks: r.checks, error: r.error, costUsd: r.costUsd,
+      ticketTitle: r.ticketTitle, status: r.status, prUrl: r.prUrl, checks: r.checks, error: r.error, costUsd: r.costUsd, usage: r.usage,
       since: r.endedAt ?? r.startedAt,
     });
     return {
@@ -632,10 +646,10 @@ export async function buildServer(d: ServerDeps): Promise<FastifyInstance> {
         ...runs.filter((r) => r.status === 'failed' && (r.endedAt ?? '') >= today).map((r) => ({ ...brief(r), why: 'failed' as const })),
       ],
       spend: {
-        today: [...spendToday.values()].reduce((a, b) => a + b, 0),
-        last7Days: [...spendWeek.values()].reduce((a, b) => a + b, 0),
-        perRunCap: perRunCap(d.store),
-        dailyCapDefault: dailyCap(d.store, ''),
+        today: sumSpent(spendToday.values()),
+        last7Days: sumSpent(spendWeek.values()),
+        perRunCaps: perRunCaps(d.store),
+        dailyCapsDefault: dailyCaps(d.store, ''),
       },
       alertsUnread: d.store.listAlerts(50).filter((a) => !a.read).length,
       activity: d.store.recentEvents(15).map((e) => ({ ...e, projectName: names.get(e.projectId) ?? 'Removed project' })),
@@ -668,18 +682,25 @@ export async function buildServer(d: ServerDeps): Promise<FastifyInstance> {
     const total = d.store.spendByProject();
     return d.store.listProjects().map((p) => ({
       projectId: p.id, name: p.name,
-      today: today.get(p.id) ?? 0, last7Days: week.get(p.id) ?? 0, total: total.get(p.id) ?? 0,
-      dailyCap: dailyCap(d.store, p.id), ownCap: d.store.getSetting(`budget.daily.${p.id}`) !== undefined,
+      today: today.get(p.id) ?? NONE, last7Days: week.get(p.id) ?? NONE, total: total.get(p.id) ?? NONE,
+      dailyCaps: dailyCaps(d.store, p.id),
+      own: { tokens: d.store.getSetting(`budget.dailyTokens.${p.id}`) ?? null, eur: d.store.getSetting(`budget.dailyEur.${p.id}`) ?? null },
     }));
   });
+  /** A project's own daily caps; null goes back to the default from Settings, a missing field stays as it is. */
   app.put<{ Params: { id: string } }>('/api/projects/:id/budget', async (req) => {
     const p = project(req.params.id);
-    const { dailyUsd } = z.object({ dailyUsd: z.number().min(0).nullable() }).parse(req.body);
-    if (dailyUsd === null) d.store.deleteSetting(`budget.daily.${p.id}`);
-    else d.store.setSetting(`budget.daily.${p.id}`, String(dailyUsd));
+    const body = z.object({ dailyTokens: z.number().int().min(0).nullable().optional(), dailyEur: z.number().min(0).nullable().optional() }).parse(req.body);
+    for (const [field, key] of [['dailyTokens', `budget.dailyTokens.${p.id}`], ['dailyEur', `budget.dailyEur.${p.id}`]] as const) {
+      const v = body[field];
+      if (v === null) d.store.deleteSetting(key);
+      else if (v !== undefined) d.store.setSetting(key, String(v));
+    }
     void d.orchestrator.tick();
-    return { dailyCap: dailyCap(d.store, p.id) };
+    return { dailyCaps: dailyCaps(d.store, p.id) };
   });
+  /** The rough USD → EUR rate the dashboard uses for estimates. */
+  app.get('/api/currency', async () => ({ eurPerUsd: eurPerUsd(d.store) }));
 
   // AI providers: Claude, any OpenAI-compatible API, or a coding CLI; and which one each role uses
   const providerView = (p: ProviderConfig) => ({
@@ -782,12 +803,9 @@ export async function buildServer(d: ServerDeps): Promise<FastifyInstance> {
         'model.assistant': 'claude-sonnet-5-5',
         'model.planner': 'claude-opus-5-5',
         'model.reviewer': 'claude-opus-5-5',
-        maxConcurrentRuns: '3',
-        'budget.perRunUsd': '5',
-        'budget.projectDailyUsd': '0',
-        'worktrees.keepDays': '3',
+        ...Object.fromEntries(Object.entries(NUMBER_SETTINGS).map(([k, v]) => [k, String(v.fallback)])),
         // Per-project values (auto-assign toggle, pending memory) have their own endpoints.
-        ...Object.fromEntries(Object.entries(d.store.allSettings()).filter(([k]) => !/^(autoAssign|memory|budget\.daily|roles)\./.test(k) && !['providers', 'chat.model'].includes(k))),
+        ...Object.fromEntries(Object.entries(d.store.allSettings()).filter(([k]) => !/^(autoAssign|memory|budget\.daily|budget\.dailyTokens|budget\.dailyEur|roles)\./.test(k) && !['providers', 'chat.model'].includes(k))),
       },
       secrets: KNOWN_SECRETS.map((s) => ({ ...s, set: set.has(s.name) || !!process.env[s.name] })),
       secretsBackend: d.secrets.kind,

@@ -7,6 +7,7 @@ import type { Project, Ticket } from '../types.js';
 import type { CodingAgent } from './coding-agent.js';
 import { projectKnowledge } from './prompts.js';
 import { chooseModel, getProvider, type Choice } from './providers/config.js';
+import { formatTokens, totalTokens, type Usage } from '../usage.js';
 
 /** "Ollama (local) · qwen3-coder:30b" */
 export function modelLabel(store: Store, c: Choice): string {
@@ -107,7 +108,7 @@ export async function askAssistant(
   cwd: string,
   history: ChatTurn[],
   message: string,
-): Promise<{ answer: string; costUsd: number; actions: ProposedAction[]; model: string }> {
+): Promise<{ answer: string; costUsd: number; usage: Usage | null; actions: ProposedAction[]; model: string }> {
   const runs = deps.store.listRuns(project.id).slice(0, 15);
   const agents = deps.store.listAgents();
   const choice = chooseModel(deps.store, 'assistant', { projectId: project.id });
@@ -150,8 +151,8 @@ Return your reply in the requested structured format.`;
   if (!out.ok) throw new Error(out.error ?? 'The assistant could not answer.');
   const data = (out.structured ?? null) as { answer?: unknown; actions?: unknown } | null;
   const model = modelLabel(deps.store, choice);
-  if (data && typeof data.answer === 'string') return { answer: data.answer, costUsd: out.costUsd, actions: parseActions(data.actions), model };
-  return { answer: out.text, costUsd: out.costUsd, actions: [], model };
+  if (data && typeof data.answer === 'string') return { answer: data.answer, costUsd: out.costUsd, usage: out.usage ?? null, actions: parseActions(data.actions), model };
+  return { answer: out.text, costUsd: out.costUsd, usage: out.usage ?? null, actions: [], model };
 }
 
 /** What the assistant knows about one project when answering across projects. */
@@ -172,7 +173,7 @@ export async function askGlobalAssistant(
   history: ChatTurn[],
   message: string,
   override?: Choice,
-): Promise<{ answer: string; costUsd: number; actions: ProposedAction[]; model: string }> {
+): Promise<{ answer: string; costUsd: number; usage: Usage | null; actions: ProposedAction[]; model: string }> {
   const agents = deps.store.listAgents();
   const runs = deps.store.listRuns().slice(0, 40);
   const projectName = new Map(digests.map((d) => [d.project.id, d.project.name]));
@@ -193,7 +194,7 @@ ${focus ? `\n## Project in focus\n${focus}\n` : ''}
 ${projects || '(no projects yet)'}
 
 ## Recent runs (newest first)
-${runs.map((r) => `- ${projectName.get(r.projectId) ?? 'removed project'} · ${r.ticketKey} ${r.status}${r.reviewRounds ? `, ${r.reviewRounds} review rounds` : ''}${r.error ? ` (${r.error})` : ''}${r.prUrl ? ` ${r.prUrl}` : ''} · $${r.costUsd.toFixed(2)}`).join('\n') || '(none)'}
+${runs.map((r) => `- ${projectName.get(r.projectId) ?? 'removed project'} · ${r.ticketKey} ${r.status}${r.reviewRounds ? `, ${r.reviewRounds} review rounds` : ''}${r.error ? ` (${r.error})` : ''}${r.prUrl ? ` ${r.prUrl}` : ''} · ${formatTokens(r.usage ? totalTokens(r.usage) : null)}`).join('\n') || '(none)'}
 
 ## Agents
 ${agents.map((a) => `- ${a.name} (${a.role}): ${a.state}${a.note ? `, ${a.note}` : ''}`).join('\n') || '(none)'}
@@ -228,5 +229,5 @@ Return your reply in the requested structured format.`;
   const scoped = scope
     ? actions.map((a): ProposedAction => (a.type === 'pause_agent' || a.type === 'resume_agent' || a.project ? a : { ...a, project: scope.name }))
     : actions;
-  return { answer: data && typeof data.answer === 'string' ? data.answer : out.text, costUsd: out.costUsd, actions: scoped, model: modelLabel(deps.store, choice) };
+  return { answer: data && typeof data.answer === 'string' ? data.answer : out.text, costUsd: out.costUsd, usage: out.usage ?? null, actions: scoped, model: modelLabel(deps.store, choice) };
 }

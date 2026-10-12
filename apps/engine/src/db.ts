@@ -2,6 +2,7 @@ import { chmodSync, existsSync, writeFileSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 import { randomUUID } from 'node:crypto';
 import type { Agent, Alert, AlertKind, BacklogDraft, ChatActionStatus, ChatMessage, StoredChatAction, BacklogItem, Project, Review, Run, RunEvent, RunEventKind, SpendKind, Ticket } from './types.js';
+import type { Usage } from './usage.js';
 import { DEFAULT_WORKFLOW_YAML } from './workflow.js';
 
 const SCHEMA = `
@@ -90,12 +91,33 @@ const now = () => new Date().toISOString();
 export const MIGRATIONS: ((db: DatabaseSync) => void)[] = [
   (db) => db.exec(SCHEMA),
   (db) => {
-    for (const c of COLUMNS) {
-      const cols = db.prepare(`PRAGMA table_info(${c.table})`).all() as Row[];
-      if (!cols.some((r) => r.name === c.column)) db.exec(c.ddl);
+    for (const c of COLUMNS) addColumn(db, c.table, c.column, c.ddl);
+  },
+  // 3: spend is measured in tokens; dollar budgets become optional euro budgets beside new token budgets.
+  (db) => {
+    for (const table of ['spend', 'runs', 'backlog_drafts']) {
+      for (const col of ['tokens_in', 'tokens_out', 'tokens_cache']) addColumn(db, table, col, `ALTER TABLE ${table} ADD COLUMN ${col} INTEGER`);
+    }
+    const get = (key: string) => (db.prepare('SELECT value FROM settings WHERE key = ?').get(key) as Row | undefined)?.value as string | undefined;
+    const rate = Number(get('currency.eurPerUsd') ?? NaN);
+    const eurPerUsd = Number.isFinite(rate) && rate > 0 ? rate : 0.9;
+    const move = (from: string, to: string) => {
+      const usd = Number(get(from) ?? NaN);
+      if (Number.isFinite(usd) && usd > 0) db.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)').run(to, String(Math.round(usd * eurPerUsd * 100) / 100));
+      db.prepare('DELETE FROM settings WHERE key = ?').run(from);
+    };
+    move('budget.perRunUsd', 'budget.perRunEur');
+    move('budget.projectDailyUsd', 'budget.projectDailyEur');
+    for (const r of db.prepare("SELECT key FROM settings WHERE key LIKE 'budget.daily.%'").all() as Row[]) {
+      move(r.key, `budget.dailyEur.${(r.key as string).slice('budget.daily.'.length)}`);
     }
   },
 ];
+
+function addColumn(db: DatabaseSync, table: string, column: string, ddl: string): void {
+  const cols = db.prepare(`PRAGMA table_info(${table})`).all() as Row[];
+  if (!cols.some((r) => r.name === column)) db.exec(ddl);
+}
 
 function migrate(db: DatabaseSync): void {
   const current = (db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version;
@@ -111,6 +133,15 @@ function migrate(db: DatabaseSync): void {
       throw new Error(`Database migration ${v + 1} failed: ${(e as Error).message}`);
     }
   }
+}
+
+export interface Spent {
+  usd: number;
+  usage: Usage | null;
+}
+const SPEND_SUMS = 'COALESCE(SUM(usd), 0) AS usd, SUM(tokens_in) AS tin, SUM(tokens_out) AS tout, SUM(tokens_cache) AS tcache, COUNT(tokens_in) + COUNT(tokens_out) AS known';
+function toSpent(r: Row): Spent {
+  return { usd: r.usd ?? 0, usage: r.known ? { input: Number(r.tin ?? 0), output: Number(r.tout ?? 0), cache: Number(r.tcache ?? 0) } : null };
 }
 
 export class Store {
@@ -215,7 +246,7 @@ export class Store {
   // Runs
   createRun(input: Pick<Run, 'projectId' | 'agentId' | 'ticketKey' | 'ticketTitle' | 'branch' | 'worktree'> & { area?: string | null }): Run {
     const r: Run = {
-      ...input, area: input.area ?? null, id: randomUUID(), status: 'running', attempts: 0, costUsd: 0, prUrl: null, error: null,
+      ...input, area: input.area ?? null, id: randomUUID(), status: 'running', attempts: 0, costUsd: 0, usage: null, prUrl: null, error: null,
       sessionId: null, baseRef: null, prNumber: null, reviewRounds: 0, checks: null, readyAt: null, startedAt: now(), endedAt: null,
     };
     this.db
@@ -250,10 +281,10 @@ export class Store {
     this.db
       .prepare(
         `UPDATE runs SET agent_id = ?, status = ?, attempts = ?, cost_usd = ?, pr_url = ?, error = ?, ended_at = ?, worktree = ?, session_id = ?,
-         base_ref = ?, pr_number = ?, review_rounds = ?, checks = ?, ready_at = ? WHERE id = ?`,
+         base_ref = ?, pr_number = ?, review_rounds = ?, checks = ?, ready_at = ?, tokens_in = ?, tokens_out = ?, tokens_cache = ? WHERE id = ?`,
       )
       .run(r.agentId, r.status, r.attempts, r.costUsd, r.prUrl, r.error, r.endedAt, r.worktree, r.sessionId, r.baseRef, r.prNumber,
-        r.reviewRounds, r.checks, r.readyAt, id);
+        r.reviewRounds, r.checks, r.readyAt, r.usage?.input ?? null, r.usage?.output ?? null, r.usage?.cache ?? null, id);
     return r;
   }
   addEvent(runId: string, kind: RunEventKind, message: string): RunEvent {
@@ -328,13 +359,13 @@ export class Store {
   }
 
   // Backlog drafts from the planner
-  createDraft(projectId: string, items: BacklogItem[], costUsd: number): BacklogDraft {
+  createDraft(projectId: string, items: BacklogItem[], costUsd: number, usage: Usage | null = null): BacklogDraft {
     const d: BacklogDraft = {
-      id: randomUUID(), projectId, status: 'draft', items, createdKeys: [], error: null, costUsd, createdAt: now(), approvedAt: null,
+      id: randomUUID(), projectId, status: 'draft', items, createdKeys: [], error: null, costUsd, usage, createdAt: now(), approvedAt: null,
     };
     this.db
-      .prepare('INSERT INTO backlog_drafts (id, project_id, status, items, created_keys, cost_usd, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
-      .run(d.id, projectId, d.status, JSON.stringify(items), '[]', costUsd, d.createdAt);
+      .prepare('INSERT INTO backlog_drafts (id, project_id, status, items, created_keys, cost_usd, tokens_in, tokens_out, tokens_cache, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+      .run(d.id, projectId, d.status, JSON.stringify(items), '[]', costUsd, usage?.input ?? null, usage?.output ?? null, usage?.cache ?? null, d.createdAt);
     return d;
   }
   getDraft(id: string): BacklogDraft | undefined {
@@ -401,16 +432,20 @@ export class Store {
   }
 
   // Spend ledger: every agent call's cost, so budgets and the overview don't depend on run rows alone
-  addSpend(projectId: string, runId: string | null, kind: SpendKind, usd: number): void {
-    if (usd > 0) this.db.prepare('INSERT INTO spend (project_id, run_id, kind, usd, ts) VALUES (?, ?, ?, ?, ?)').run(projectId, runId, kind, usd, now());
+  addSpend(projectId: string, runId: string | null, kind: SpendKind, usd: number, usage: Usage | null = null): void {
+    if (!(usd > 0) && !usage) return;
+    this.db
+      .prepare('INSERT INTO spend (project_id, run_id, kind, usd, tokens_in, tokens_out, tokens_cache, ts) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+      .run(projectId, runId, kind, usd > 0 ? usd : 0, usage?.input ?? null, usage?.output ?? null, usage?.cache ?? null, now());
   }
-  spendSince(projectId: string, sinceIso: string): number {
-    const row = this.db.prepare('SELECT COALESCE(SUM(usd), 0) AS total FROM spend WHERE project_id = ? AND ts >= ?').get(projectId, sinceIso) as Row;
-    return row.total;
+  /** USD and tokens spent since a time; usage is null when no entry recorded tokens. */
+  spendSince(projectId: string, sinceIso: string): Spent {
+    const row = this.db.prepare(`SELECT ${SPEND_SUMS} FROM spend WHERE project_id = ? AND ts >= ?`).get(projectId, sinceIso) as Row;
+    return toSpent(row);
   }
-  spendByProject(sinceIso = ''): Map<string, number> {
-    const rows = this.db.prepare('SELECT project_id, SUM(usd) AS total FROM spend WHERE ts >= ? GROUP BY project_id').all(sinceIso) as Row[];
-    return new Map(rows.map((r) => [r.project_id, r.total]));
+  spendByProject(sinceIso = ''): Map<string, Spent> {
+    const rows = this.db.prepare(`SELECT project_id, ${SPEND_SUMS} FROM spend WHERE ts >= ? GROUP BY project_id`).all(sinceIso) as Row[];
+    return new Map(rows.map((r) => [r.project_id, toSpent(r)]));
   }
 
   // Alerts
@@ -463,7 +498,7 @@ function toAgent(r: Row): Agent {
 function toRun(r: Row): Run {
   return {
     id: r.id, projectId: r.project_id, agentId: r.agent_id, ticketKey: r.ticket_key, ticketTitle: r.ticket_title,
-    branch: r.branch, worktree: r.worktree, status: r.status, attempts: r.attempts, costUsd: r.cost_usd,
+    branch: r.branch, worktree: r.worktree, status: r.status, attempts: r.attempts, costUsd: r.cost_usd, usage: usageOf(r),
     prUrl: r.pr_url ?? null, error: r.error ?? null, area: r.area ?? null, sessionId: r.session_id ?? null, baseRef: r.base_ref ?? null,
     prNumber: r.pr_number ?? null, reviewRounds: r.review_rounds ?? 0, checks: r.checks ?? null, readyAt: r.ready_at ?? null,
     startedAt: r.started_at, endedAt: r.ended_at ?? null,
@@ -484,8 +519,14 @@ function toReview(r: Row): Review {
 function toDraft(r: Row): BacklogDraft {
   return {
     id: r.id, projectId: r.project_id, status: r.status, items: JSON.parse(r.items), createdKeys: JSON.parse(r.created_keys),
-    error: r.error ?? null, costUsd: r.cost_usd, createdAt: r.created_at, approvedAt: r.approved_at ?? null,
+    error: r.error ?? null, costUsd: r.cost_usd, usage: usageOf(r), createdAt: r.created_at, approvedAt: r.approved_at ?? null,
   };
+}
+/** Token columns as a usage, or null when none were recorded. */
+function usageOf(r: Row): Usage | null {
+  if (r.tokens_in === null && r.tokens_out === null && r.tokens_cache === null) return null;
+  if (r.tokens_in === undefined) return null;
+  return { input: Number(r.tokens_in ?? 0), output: Number(r.tokens_out ?? 0), cache: Number(r.tokens_cache ?? 0) };
 }
 function toTicket(r: Row): Ticket {
   return {

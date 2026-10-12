@@ -136,13 +136,14 @@ describe('overview', () => {
     const run = store.createRun({ projectId: shop.id, agentId: worker.id, ticketKey: 'SHO-1', ticketTitle: 'Checkout page', branch: 'b', worktree: '' });
     store.updateRun(run.id, { status: 'blocked', error: 'Tests fail' });
     store.addEvent(run.id, 'error', 'Tests fail');
-    store.addSpend(shop.id, run.id, 'worker', 1.25);
+    store.addSpend(shop.id, run.id, 'worker', 1.25, { input: 3000, output: 500, cache: 0 });
     const o = (await app.inject({ method: 'GET', url: '/api/overview' })).json();
     const shopRow = o.projects.find((p: { name: string }) => p.name === 'Shop');
-    expect(shopRow).toMatchObject({ tickets: { todo: 1, in_progress: 0, in_review: 0, done: 0 }, blocked: 1, spendToday: 1.25 });
+    expect(shopRow).toMatchObject({ tickets: { todo: 1, in_progress: 0, in_review: 0, done: 0 }, blocked: 1, spendToday: { usd: 1.25, usage: { input: 3000, output: 500, cache: 0 } } });
     expect(o.needsYou).toEqual([expect.objectContaining({ why: 'blocked', ticketKey: 'SHO-1', projectName: 'Shop', error: 'Tests fail' })]);
     expect(o.agents.map((a: { name: string }) => a.name)).toEqual(['Worker 1']);
-    expect(o.spend.today).toBe(1.25);
+    expect(o.spend.today).toEqual({ usd: 1.25, usage: { input: 3000, output: 500, cache: 0 } });
+    expect(o.spend.perRunCaps).toEqual({ tokens: 2_000_000, eur: 0 });
     expect(o.activity[0]).toMatchObject({ ticketKey: 'SHO-1', projectName: 'Shop', message: 'Tests fail' });
     await app.close();
   });

@@ -7,7 +7,7 @@ const at = (h: number) => new Date(Date.UTC(2026, 9, 10, 0, 0, 0) + h * H).toISO
 
 function run(over: Partial<Run> & Pick<Run, 'id' | 'ticketKey' | 'status'>): Run {
   return {
-    projectId: 'p', agentId: 'a', ticketTitle: over.ticketKey, branch: 'b', worktree: '', attempts: 0, costUsd: 0, prUrl: null, error: null,
+    projectId: 'p', agentId: 'a', ticketTitle: over.ticketKey, branch: 'b', worktree: '', attempts: 0, costUsd: 0, usage: null, prUrl: null, error: null,
     area: null, sessionId: null, baseRef: null, prNumber: null, reviewRounds: 0, checks: null, readyAt: null, startedAt: at(0), endedAt: null, ...over,
   };
 }

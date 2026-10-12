@@ -3,8 +3,14 @@ import type { Store } from './db.js';
 /** Number settings: their default and the smallest value that makes sense. */
 export const NUMBER_SETTINGS: Record<string, { fallback: number; min: number; integer?: boolean }> = {
   maxConcurrentRuns: { fallback: 3, min: 1, integer: true },
-  'budget.perRunUsd': { fallback: 5, min: 0 },
-  'budget.projectDailyUsd': { fallback: 0, min: 0 },
+  // Budgets count tokens first: a euro cap never stops a free local model. 0 means no limit.
+  'budget.perRunTokens': { fallback: 2_000_000, min: 0, integer: true },
+  'budget.projectDailyTokens': { fallback: 20_000_000, min: 0, integer: true },
+  // Optional euro caps on top, from each provider's prices.
+  'budget.perRunEur': { fallback: 0, min: 0 },
+  'budget.projectDailyEur': { fallback: 0, min: 0 },
+  // A rough rate for showing estimates in euros; no live rate is fetched.
+  'currency.eurPerUsd': { fallback: 0.9, min: 0 },
   'worktrees.keepDays': { fallback: 3, min: -1, integer: true },
 };
 

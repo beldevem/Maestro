@@ -1,6 +1,7 @@
 import { query, type Options } from '@anthropic-ai/claude-agent-sdk';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { usageFromClaude, type Usage } from '../usage.js';
 
 export interface AgentMessage {
   kind: 'agent' | 'tool' | 'info';
@@ -19,6 +20,8 @@ export interface AgentTask {
   resume?: string;
   maxTurns?: number;
   maxBudgetUsd?: number;
+  /** Stop once the call has used this many tokens (enforced by providers that count as they go). */
+  maxTokens?: number;
   env?: Record<string, string>;
   /** JSON schema the final answer must follow; the result comes back in `structured`. */
   outputSchema?: Record<string, unknown>;
@@ -30,6 +33,8 @@ export interface AgentOutcome {
   sessionId: string | null;
   text: string;
   costUsd: number;
+  /** Tokens used, when the provider reports them; null or missing when unknown. */
+  usage?: Usage | null;
   ok: boolean;
   error?: string;
   /** Present when the task had an outputSchema and the agent returned matching output. */
@@ -96,6 +101,7 @@ export class ClaudeCodingAgent implements CodingAgent {
     let sessionId: string | null = task.resume ?? null;
     let text = '';
     let costUsd = 0;
+    let usage: Usage | null = null;
     let ok = false;
     let error: string | undefined;
     let structured: unknown;
@@ -110,6 +116,7 @@ export class ClaudeCodingAgent implements CodingAgent {
           }
         } else if (msg.type === 'result') {
           costUsd = msg.total_cost_usd ?? 0;
+          usage = usageFromClaude((msg as { usage?: Record<string, unknown> }).usage);
           if (msg.subtype === 'success' && !msg.is_error) {
             ok = true;
             text = msg.result;
@@ -122,6 +129,6 @@ export class ClaudeCodingAgent implements CodingAgent {
     } catch (e) {
       error = e instanceof Error ? e.message : String(e);
     }
-    return { sessionId, text, costUsd, ok, error, structured };
+    return { sessionId, text, costUsd, usage, ok, error, structured };
   }
 }

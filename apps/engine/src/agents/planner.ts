@@ -87,7 +87,7 @@ export async function draftBacklog(
     env: key ? { ANTHROPIC_API_KEY: key } : {},
   });
   if (!out.ok) throw new Error(out.error ?? 'The planner stopped without a backlog.');
-  return deps.store.createDraft(project.id, parseBacklog(out.structured, out.text), out.costUsd);
+  return deps.store.createDraft(project.id, parseBacklog(out.structured, out.text), out.costUsd, out.usage ?? null);
 }
 
 export interface ApproveResult {

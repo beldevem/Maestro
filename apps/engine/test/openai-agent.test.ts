@@ -58,6 +58,7 @@ describe('OpenAI-compatible agent loop', () => {
     });
     expect(out).toMatchObject({ ok: true, text: 'Greeting takes a name now.' });
     expect(out.costUsd).toBeCloseTo(4 * (1000 * 1 + 500 * 2) / 1e6);
+    expect(out.usage).toEqual({ input: 4000, output: 2000, cache: 0 });
     expect(readFileSync(join(repo, 'src/greet.js'), 'utf8')).toBe('export const greet = (name) => `Hello, ${name}!`;\n');
     expect(readFileSync(join(repo, 'test/greet.test.js'), 'utf8')).toBe('ok\n');
     expect(seen).toContain('tool:list_files src/**/*.js');
@@ -134,6 +135,10 @@ describe('OpenAI-compatible agent loop', () => {
     const budget = await new OpenAICompatibleAgent(cfg(), undefined, sessions, pricey.impl).run({ cwd: repo, prompt: 'p', systemPrompt: 's', model: 'coder-1', allowedTools: ALL, maxBudgetUsd: 2.5 });
     expect(budget).toMatchObject({ ok: false, error: 'Agent stopped: error_max_budget_usd' });
     expect(budget.costUsd).toBe(3);
+    // A token cap stops free local models, which a dollar cap never would.
+    const free = scripted(Array.from({ length: 10 }, () => ({ tool_calls: [{ name: 'list_files', args: { pattern: '*' } }], usage: { prompt_tokens: 40_000, completion_tokens: 2_000 } })));
+    const tokens = await new OpenAICompatibleAgent(cfg(), undefined, sessions, free.impl).run({ cwd: repo, prompt: 'p', systemPrompt: 's', model: 'local', allowedTools: ALL, maxTokens: 100_000 });
+    expect(tokens).toMatchObject({ ok: false, error: 'Agent stopped: error_max_budget_tokens', usage: { input: 120_000, output: 6_000, cache: 0 } });
   });
 
   it('resumes a session so a fix round continues the same conversation', async () => {

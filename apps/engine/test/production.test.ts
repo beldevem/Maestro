@@ -73,6 +73,24 @@ describe('database', () => {
     s.close();
   });
 
+  it('moves dollar budgets into euro budgets when tokens become the measure', () => {
+    const file = join(mkdtempSync(join(tmpdir(), 'maestro-db-')), 'db.sqlite');
+    const a = new Store(file);
+    a.db.exec('PRAGMA user_version = 2');
+    for (const [k, v] of [['budget.perRunUsd', '5'], ['budget.projectDailyUsd', '0'], ['budget.daily.p1', '2'], ['currency.eurPerUsd', '0.9']]) a.setSetting(k, v);
+    a.close();
+    const b = new Store(file);
+    expect(b.schemaVersion()).toBe(MIGRATIONS.length);
+    expect(b.getSetting('budget.perRunEur')).toBe('4.5');
+    expect(b.getSetting('budget.projectDailyEur')).toBeUndefined();
+    expect(b.getSetting('budget.dailyEur.p1')).toBe('1.8');
+    for (const old of ['budget.perRunUsd', 'budget.projectDailyUsd', 'budget.daily.p1']) expect(b.getSetting(old)).toBeUndefined();
+    // Runs from before token counts show no usage (n/a), not zero.
+    const run = b.createRun({ projectId: 'p1', agentId: 'a', ticketKey: 'K-1', ticketTitle: 't', branch: 'b', worktree: '' });
+    expect(b.getRun(run.id)!.usage).toBeNull();
+    b.close();
+  });
+
   it('refuses a database from a newer Maestro', () => {
     const file = join(mkdtempSync(join(tmpdir(), 'maestro-db-')), 'db.sqlite');
     const db = new DatabaseSync(file);

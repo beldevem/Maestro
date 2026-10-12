@@ -1,10 +1,13 @@
 import type { Review, Run } from './types.js';
+import { addUsage, totalTokens, type Usage } from './usage.js';
 
 export interface TicketMetrics {
   ticketKey: string;
   ticketTitle: string;
   runs: number;
   costUsd: number;
+  /** Tokens over the ticket's runs; null when none recorded any. */
+  usage: Usage | null;
   fixAttempts: number;
   reviewRounds: number;
   /** Latest run's status. */
@@ -29,6 +32,9 @@ export interface Metrics {
   meanReviewRounds: number | null;
   totalCostUsd: number;
   costPerTicketUsd: number | null;
+  totalUsage: Usage | null;
+  /** Mean tokens per ticket, over tickets with token counts. */
+  tokensPerTicket: number | null;
   tickets: TicketMetrics[];
 }
 
@@ -55,13 +61,14 @@ export function computeMetrics(runs: Run[], reviewsOf: (runId: string) => Review
       ticketTitle: last.ticketTitle,
       runs: rs.length,
       costUsd: rs.reduce((a, r) => a + r.costUsd, 0),
+      usage: addUsage(...rs.map((r) => r.usage)),
       fixAttempts: rs.reduce((a, r) => a + r.attempts, 0),
       reviewRounds: rs.reduce((a, r) => a + r.reviewRounds, 0),
       status: last.status,
       cycleTimeMs: done ? ms(sorted[0].startedAt, done.endedAt!) : null,
     };
   });
-  tickets.sort((a, b) => b.costUsd - a.costUsd);
+  tickets.sort((a, b) => totalTokens(b.usage) - totalTokens(a.usage) || b.costUsd - a.costUsd);
 
   const totalCostUsd = runs.reduce((a, r) => a + r.costUsd, 0);
   return {
@@ -76,6 +83,8 @@ export function computeMetrics(runs: Run[], reviewsOf: (runId: string) => Review
     meanReviewRounds: mean(finished.map((r) => r.reviewRounds)),
     totalCostUsd,
     costPerTicketUsd: tickets.length ? totalCostUsd / tickets.length : null,
+    totalUsage: addUsage(...runs.map((r) => r.usage)),
+    tokensPerTicket: mean(tickets.filter((t) => t.usage).map((t) => totalTokens(t.usage))),
     tickets,
   };
 }

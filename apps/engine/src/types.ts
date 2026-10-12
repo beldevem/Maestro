@@ -1,3 +1,4 @@
+import type { Usage } from './usage.js';
 export type CodeHostProvider = 'github' | 'gitlab' | 'bitbucket' | 'local';
 export type PmProvider = 'manual' | 'jira' | 'trello';
 export type DesignProvider = 'none' | 'figma';
@@ -97,6 +98,8 @@ export interface Run {
   status: RunStatus;
   attempts: number;
   costUsd: number;
+  /** Tokens the run's agent calls used; null when no call reported any (or the run predates token counts). */
+  usage: Usage | null;
   prUrl: string | null;
   error: string | null;
   /** The ticket's `area:` label, so one_per_area works without asking the PM tool. */
@@ -147,6 +150,7 @@ export interface BacklogDraft {
   createdKeys: (string | null)[];
   error: string | null;
   costUsd: number;
+  usage: Usage | null;
   createdAt: string;
   approvedAt: string | null;
 }

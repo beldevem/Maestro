@@ -3,6 +3,7 @@ import { run, tail } from '../../proc.js';
 import type { AgentOutcome, AgentTask, CodingAgent } from '../coding-agent.js';
 import type { ProviderConfig } from './config.js';
 import { extractJson } from './openai.js';
+import { usageFromCliText } from '../../usage.js';
 
 export interface CliPreset {
   id: string;
@@ -66,11 +67,13 @@ export class CliAgent implements CodingAgent {
       cwd: task.cwd, env: { ...task.env, CI: 'true' }, timeoutMs: cli.timeoutMinutes * 60_000, signal: task.signal,
     });
     const text = tail(res.output.trim(), 20_000);
+    // Some CLIs print the tokens they used; others report nothing (shown as n/a).
+    const usage = usageFromCliText(res.output);
     if (text) task.onMessage?.({ kind: 'agent', text: tail(text, 2000) });
-    if (task.signal?.aborted) return { sessionId: null, text, costUsd: 0, ok: false, error: 'aborted' };
-    if (res.timedOut) return { sessionId: null, text, costUsd: 0, ok: false, error: `${cli.command} did not finish within ${cli.timeoutMinutes} minutes.` };
-    if (res.code !== 0) return { sessionId: null, text, costUsd: 0, ok: false, error: `${cli.command} exited with code ${res.code}: ${tail(text, 600)}` };
+    if (task.signal?.aborted) return { sessionId: null, text, costUsd: 0, usage, ok: false, error: 'aborted' };
+    if (res.timedOut) return { sessionId: null, text, costUsd: 0, usage, ok: false, error: `${cli.command} did not finish within ${cli.timeoutMinutes} minutes.` };
+    if (res.code !== 0) return { sessionId: null, text, costUsd: 0, usage, ok: false, error: `${cli.command} exited with code ${res.code}: ${tail(text, 600)}` };
     const structured = task.outputSchema ? extractJson(text) : undefined;
-    return { sessionId: null, text, costUsd: 0, ok: true, ...(structured !== undefined ? { structured } : {}) };
+    return { sessionId: null, text, costUsd: 0, usage, ok: true, ...(structured !== undefined ? { structured } : {}) };
   }
 }
