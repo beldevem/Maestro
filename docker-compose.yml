@@ -10,6 +10,9 @@ services:
     ports:
       # Only this machine can reach it.
       - "127.0.0.1:${MAESTRO_PORT:-4800}:4800"
+    extra_hosts:
+      # Lets an AI provider on this machine be reached as host.docker.internal (when it listens beyond 127.0.0.1).
+      - "host.docker.internal:host-gateway"
     environment:
       MAESTRO_HOME: ${MAESTRO_DATA:?set MAESTRO_DATA in .env}
       HOME: ${MAESTRO_DATA}/home

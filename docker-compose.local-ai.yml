@@ -1,0 +1,13 @@
+# Opt-in: reach AI servers that only listen on this machine's 127.0.0.1 (Ollama and LM Studio do by default).
+#   docker compose -f docker-compose.yml -f docker-compose.local-ai.yml up -d
+# The container shares the host's network, so http://localhost:11434/v1 works as the Ollama base URL.
+# Maestro then listens on 127.0.0.1 itself, so it is still only reachable from this machine.
+# The alternative: make the server listen on all interfaces (for Ollama, OLLAMA_HOST=0.0.0.0) and use
+# http://host.docker.internal:11434/v1 without this file.
+services:
+  maestro:
+    network_mode: host
+    ports: !reset []
+    extra_hosts: !reset []
+    environment:
+      MAESTRO_HOST: 127.0.0.1
