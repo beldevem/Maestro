@@ -323,7 +323,7 @@ a.button.primary { background: var(--accent); border-color: var(--accent); color
 .action-card .action-text { flex: 1; min-width: 0; }
 
 /* Settings stepper: steps on the left, the open step on the right; an accordion on narrow screens */
-.stepper { display: grid; grid-template-columns: 260px minmax(0, 1fr); gap: 0 24px; align-items: start; }
+.stepper { display: grid; grid-template-columns: 260px minmax(0, 1fr); grid-template-rows: repeat(6, auto) 1fr; gap: 2px 24px; align-items: start; }
 .step { display: contents; }
 .step-head { grid-column: 1; display: flex; align-items: center; gap: 12px; width: 100%; text-align: left; justify-content: flex-start; border: 0; background: none; padding: 10px 12px; border-radius: var(--radius); }
 .step-head:hover { background: var(--surface-2); }
@@ -334,7 +334,7 @@ a.button.primary { background: var(--accent); border-color: var(--accent); color
 .step-done { background: var(--good); border-color: var(--good); color: #fff; }
 .step-todo { border-color: var(--warn); color: var(--warn); }
 .step.open .step-num:not(.step-done) { border-color: var(--accent); color: var(--accent); }
-.step-body { grid-column: 2; grid-row: 1 / span 6; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 20px 22px; box-shadow: var(--shadow); }
+.step-body { grid-column: 2; grid-row: 1 / -1; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 20px 22px; box-shadow: var(--shadow); }
 .step-body h2 { display: flex; align-items: center; gap: 8px; font-size: 17px; }
 .note-box { display: flex; gap: 8px; align-items: center; background: var(--surface-2); border-radius: var(--radius); padding: 8px 12px; font-size: 13px; color: var(--muted); }
 .secret-row { display: flex; justify-content: space-between; gap: 16px; flex-wrap: wrap; border-top: 1px solid var(--border); padding: 14px 0; }
