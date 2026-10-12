@@ -863,8 +863,14 @@ export async function buildServer(d: ServerDeps): Promise<FastifyInstance> {
 
   // Live updates
   // Same-origin only: no CORS header here, so other web pages can't read agent activity from this machine.
+  const streams = new Set<import('node:http').ServerResponse>();
+  // On shutdown, end the open streams so closing the server doesn't wait for them; browsers reconnect.
+  app.addHook('preClose', async () => {
+    for (const s of streams) s.end();
+  });
   app.get('/api/events', (req, reply) => {
     reply.hijack();
+    streams.add(reply.raw);
     reply.raw.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive' });
     // Something must be sent for the browser to report the stream as open.
     reply.raw.write(': connected\n\n');
@@ -872,6 +878,7 @@ export async function buildServer(d: ServerDeps): Promise<FastifyInstance> {
     const ping = setInterval(() => reply.raw.write(': ping\n\n'), 25_000);
     bus.on('event', send);
     req.raw.on('close', () => {
+      streams.delete(reply.raw);
       clearInterval(ping);
       bus.off('event', send);
     });

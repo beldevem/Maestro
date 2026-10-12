@@ -14,3 +14,6 @@
 # Maestro data never goes into the image.
 .maestro
 data
+# Screenshots and scratch files.
+**/*.png
+!apps/dashboard/public/**

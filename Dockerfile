@@ -1,7 +1,11 @@
 # Maestro: engine (Node + TypeScript via tsx) serving the built Angular dashboard on one port.
 
+# The base image, pinned by digest so every build starts from the same bits.
+# To update: docker buildx imagetools inspect node:24-bookworm-slim, then paste the new digest.
+ARG NODE_IMAGE=node:24-bookworm-slim@sha256:d6aa754f16b3197301076f047b5def2f02ea1dbbc2ca920407d46d7ec7f87b20
+
 # Build the dashboard.
-FROM node:24-bookworm-slim AS dashboard
+FROM ${NODE_IMAGE} AS dashboard
 WORKDIR /app/apps/dashboard
 COPY apps/dashboard/package.json apps/dashboard/package-lock.json ./
 RUN npm ci --no-audit --no-fund
@@ -9,12 +13,12 @@ COPY apps/dashboard ./
 RUN npx ng analytics disable --global >/dev/null 2>&1 || true; npm run build
 
 # Install the engine's runtime dependencies (including the Claude Agent SDK and its native CLI for this platform).
-FROM node:24-bookworm-slim AS engine
+FROM ${NODE_IMAGE} AS engine
 WORKDIR /app/apps/engine
 COPY apps/engine/package.json apps/engine/package-lock.json ./
 RUN npm ci --omit=dev --no-audit --no-fund
 
-FROM node:24-bookworm-slim
+FROM ${NODE_IMAGE}
 # git for clones, worktrees and commits; the docker CLI only when the gate sandbox is wanted.
 ARG WITH_DOCKER_CLI=false
 # Coding CLIs to use as AI providers, as npm packages, e.g. "@github/copilot @openai/codex @google/gemini-cli".
@@ -44,7 +48,7 @@ ENV NODE_ENV=production \
 USER node
 EXPOSE 4800
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
-  CMD node -e "fetch('http://127.0.0.1:'+(process.env.MAESTRO_PORT||4800)+'/api/health').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"
+  CMD node -e "fetch('http://127.0.0.1:'+(process.env.MAESTRO_PORT||4800)+'/api/ready').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"
 WORKDIR /app/apps/engine
 # tini as PID 1 reaps the agent and gate processes the engine spawns.
 ENTRYPOINT ["/usr/bin/tini", "--"]

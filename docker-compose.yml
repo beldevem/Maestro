@@ -9,6 +9,8 @@ services:
         EXTRA_NPM_CLIS: ${EXTRA_NPM_CLIS:-}
     image: maestro:local
     restart: unless-stopped
+    # The engine stops its agents and closes the database on SIGTERM; give it time before a kill.
+    stop_grace_period: 20s
     # Your uid/gid, so files in mounted repositories and the data folder stay yours.
     user: "${MAESTRO_UID:-1000}:${MAESTRO_GID:-1000}"
     ports:
