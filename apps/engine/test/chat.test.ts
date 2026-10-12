@@ -89,6 +89,8 @@ describe('chat actions', () => {
     const { app, p } = await setup(agent);
     const res = (await app.inject({ method: 'POST', url: `/api/projects/${p.id}/chat`, payload: { message: 'hi' } })).json();
     expect(res).toMatchObject({ answer: 'Just an answer.', actions: [] });
+    // The reply says which model answered, as on the dashboard chat.
+    expect(res.model).toMatch(/\S/);
     expect(agent.tasks[0].cwd).not.toBe(process.cwd());
     await app.close();
   });

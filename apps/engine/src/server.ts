@@ -481,7 +481,7 @@ export async function buildServer(d: ServerDeps): Promise<FastifyInstance> {
     const reply = await askAssistant(d, p, tickets, repoDir(p), history, message);
     d.store.addSpend(p.id, null, 'chat', reply.costUsd);
     d.store.addChatMessage(p.id, 'user', message);
-    const answer = d.store.addChatMessage(p.id, 'assistant', reply.answer);
+    const answer = d.store.addChatMessage(p.id, 'assistant', reply.answer, reply.model);
     answer.actions = reply.actions.map((action) => d.store.addChatAction(p.id, answer.id, { type: action.type, summary: describeAction(action), action }));
     return { ...answer, answer: reply.answer, costUsd: reply.costUsd };
   });

@@ -107,7 +107,7 @@ export async function askAssistant(
   cwd: string,
   history: ChatTurn[],
   message: string,
-): Promise<{ answer: string; costUsd: number; actions: ProposedAction[] }> {
+): Promise<{ answer: string; costUsd: number; actions: ProposedAction[]; model: string }> {
   const runs = deps.store.listRuns(project.id).slice(0, 15);
   const agents = deps.store.listAgents();
   const choice = chooseModel(deps.store, 'assistant', { projectId: project.id });
@@ -149,8 +149,9 @@ Return your reply in the requested structured format.`;
   });
   if (!out.ok) throw new Error(out.error ?? 'The assistant could not answer.');
   const data = (out.structured ?? null) as { answer?: unknown; actions?: unknown } | null;
-  if (data && typeof data.answer === 'string') return { answer: data.answer, costUsd: out.costUsd, actions: parseActions(data.actions) };
-  return { answer: out.text, costUsd: out.costUsd, actions: [] };
+  const model = modelLabel(deps.store, choice);
+  if (data && typeof data.answer === 'string') return { answer: data.answer, costUsd: out.costUsd, actions: parseActions(data.actions), model };
+  return { answer: out.text, costUsd: out.costUsd, actions: [], model };
 }
 
 /** What the assistant knows about one project when answering across projects. */
