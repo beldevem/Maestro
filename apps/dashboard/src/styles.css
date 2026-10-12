@@ -422,3 +422,5 @@ input[aria-invalid='true'] { border-color: var(--bad); }
 .md pre code { background: none; padding: 0; overflow-wrap: normal; word-break: normal; }
 .msg-time { display: flex; gap: 8px; flex-wrap: wrap; font-size: 11px; color: var(--muted); margin-top: 4px; }
 .msg-model { opacity: .85; }
+.chat-log .action-card { max-width: 100%; align-self: stretch; }
+.chat-log .action-card .action-text { flex: 1 1 100%; min-width: 0; overflow-wrap: anywhere; }
