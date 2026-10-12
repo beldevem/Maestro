@@ -83,7 +83,7 @@ const SUGGESTIONS = [
         }
         @for (m of messages(); track $index) {
           <div class="msg msg-{{ m.role }}">
-            @if (m.role === 'assistant') { <div class="md" [innerHTML]="md(m.content)"></div> } @else { {{ m.content }} }
+            @if (m.role === 'assistant') { <div class="md" [innerHTML]="md(m.content)"></div> } @else { <div class="msg-text">{{ m.content }}</div> }
             <span class="msg-time">
               @if (m.createdAt) { <time>{{ m.createdAt | date: 'shortTime' }}</time> }
               @if (m.role === 'assistant' && m.model) { <span class="msg-model">{{ m.model }}</span> }

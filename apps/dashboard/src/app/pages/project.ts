@@ -133,7 +133,7 @@ type Tab = 'board' | 'knowledge' | 'workflow' | 'runs' | 'chat' | 'connectors';
           <form class="panel" (ngSubmit)="saveMemory()">
             <h2>Project memory <span class="mono muted">.maestro/memory.md</span></h2>
             <p class="hint">Learnings agents record after each ticket, kept in the repository and read by every agent. Your edits are committed with the next ticket's change{{ memoryPending() ? '; one is waiting now' : '' }}.</p>
-            <textarea class="code" [(ngModel)]="memoryText" name="memory" rows="12" spellcheck="false" placeholder="Nothing recorded yet."></textarea>
+            <textarea class="code" [(ngModel)]="memoryText" name="memory" aria-label="Project memory" rows="12" spellcheck="false" placeholder="Nothing recorded yet."></textarea>
             <div class="row">
               <button class="primary" type="submit">Save</button>
               @if (memoryPending()) { <button type="button" class="quiet" (click)="discardMemory()">Discard my edit</button> }
@@ -144,7 +144,7 @@ type Tab = 'board' | 'knowledge' | 'workflow' | 'runs' | 'chat' | 'connectors';
         @case ('workflow') {
           <form class="panel" (ngSubmit)="save({ workflowYaml: p.workflowYaml })">
             <p class="hint">Branch naming, Definition of Ready and Done, quality gates and fix attempts.</p>
-            <textarea class="code" [(ngModel)]="p.workflowYaml" name="workflow" rows="28" spellcheck="false"></textarea>
+            <textarea class="code" [(ngModel)]="p.workflowYaml" name="workflow" aria-label="Workflow configuration (YAML)" rows="28" spellcheck="false"></textarea>
             <button class="primary" type="submit">Save</button>
           </form>
         }
@@ -160,7 +160,7 @@ type Tab = 'board' | 'knowledge' | 'workflow' | 'runs' | 'chat' | 'connectors';
               <span class="meta">Spent today \${{ s.today | number: '1.2-2' }}{{ s.dailyCap > 0 ? ' of $' + (s.dailyCap | number: '1.0-2') : ', no limit' }} · 7 days \${{ s.last7Days | number: '1.2-2' }} · all time \${{ s.total | number: '1.2-2' }}</span>
             }
           </form>
-          @if (projectRuns().length === 0) { <p class="empty">No runs yet. Assign a ticket on the board.</p> }
+          @if (projectRuns().length === 0) { <p class="empty">No runs yet. Assign a ticket on the board.</p> } @else {
           <table class="table">
             <thead><tr><th>Ticket</th><th>Status</th><th>Branch</th><th>Fix tries</th><th>Cost</th><th>Started</th><th></th></tr></thead>
             <tbody>
@@ -177,6 +177,7 @@ type Tab = 'board' | 'knowledge' | 'workflow' | 'runs' | 'chat' | 'connectors';
               }
             </tbody>
           </table>
+          }
         }
 
         @case ('chat') {

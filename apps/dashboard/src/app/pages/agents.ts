@@ -42,7 +42,7 @@ const BUSY: AgentState[] = ['working', 'running_checks', 'addressing_review', 'w
             </select>
           </label>
           <div class="field"><span class="field-label">Model</span>
-            <app-model-select [provider]="draft.provider || defaultId()" [(value)]="draft.model" selectId="new-model" label="Model" defaultLabel="Default model" />
+            <app-model-select [provider]="draft.provider || defaultId()" [(value)]="draft.model" selectId="new-model" label="Model" [defaultLabel]="defaultModelLabel(draft.provider)" />
           </div>
         </div>
         <div class="row">
@@ -75,7 +75,7 @@ const BUSY: AgentState[] = ['working', 'running_checks', 'addressing_review', 'w
                 </select>
               </label>
               <div class="field"><span class="field-label">Model</span>
-                <app-model-select [provider]="edit.provider || defaultId()" [(value)]="edit.model" [selectId]="'edit-model-' + a.id" label="Model" defaultLabel="Default model" />
+                <app-model-select [provider]="edit.provider || defaultId()" [(value)]="edit.model" [selectId]="'edit-model-' + a.id" label="Model" [defaultLabel]="defaultModelLabel(edit.provider)" />
               </div>
               <div class="row">
                 <button class="primary" type="submit" [disabled]="!edit.name.trim() || busy()">Save</button>
@@ -87,7 +87,7 @@ const BUSY: AgentState[] = ['working', 'running_checks', 'addressing_review', 'w
               <h2>{{ a.name }}</h2>
               <span class="state state-{{ a.state }}">{{ stateLabel[a.state] }}</span>
             </div>
-            <p class="meta">{{ providerName(a.provider) }} · {{ a.model || 'default model' }}</p>
+            <p class="meta">{{ providerName(a.provider) }} · {{ a.model || defaultModel(a.provider) }}</p>
             @if (a.note) { <p>{{ a.note }}</p> }
             @if (runFor(a); as r) {
               <p><a [routerLink]="['/runs', r.id]">{{ r.ticketKey }}: {{ r.ticketTitle }}</a></p>
@@ -121,6 +121,8 @@ export class AgentsPage {
   edit = { name: '', provider: '', model: '' };
   readonly providers = signal<ProviderView[]>([]);
   readonly defaultId = signal('claude');
+  /** The model set for the worker role in Settings. */
+  readonly roleModel = signal('');
 
   readonly summary = computed(() => {
     const counts = new Map<AgentState, number>();
@@ -132,7 +134,19 @@ export class AgentsPage {
     void this.api.providers?.().then((i) => {
       this.providers.set(i.providers);
       this.defaultId.set(i.roles.worker.provider);
+      this.roleModel.set(i.roles.worker.model);
     }, () => undefined);
+  }
+
+  /** What "no model" means for a worker: the worker role's model when it uses that provider, else the provider's own default. */
+  defaultModel(provider: string): string {
+    const usesRole = !provider || provider === this.defaultId();
+    return usesRole && this.roleModel() ? `${this.roleModel()} (default)` : 'default model';
+  }
+
+  defaultModelLabel(provider: string): string {
+    const usesRole = !provider || provider === this.defaultId();
+    return usesRole && this.roleModel() ? `Default: ${this.roleModel()}` : 'The provider’s default model';
   }
 
   defaultName(): string {
