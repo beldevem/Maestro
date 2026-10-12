@@ -1,15 +1,16 @@
 import { Component, DestroyRef, computed, effect, inject, input, signal } from '@angular/core';
-import { DatePipe, DecimalPipe } from '@angular/common';
+import { DatePipe } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { RouterLink } from '@angular/router';
 import { Api } from '../api';
 import { Live } from '../live';
 import { Confirm } from '../ui/confirm';
 import { CHECKS_LABEL, RUN_LABEL, VERDICT_LABEL, type Review, type Run, type RunEvent } from '../models';
+import { UsageView } from '../ui/usage';
 
 @Component({
   selector: 'app-run',
-  imports: [RouterLink, DatePipe, DecimalPipe, FormsModule],
+  imports: [UsageView, RouterLink, DatePipe, FormsModule],
   template: `
     @if (run(); as r) {
       <header class="page-head">
@@ -25,7 +26,7 @@ import { CHECKS_LABEL, RUN_LABEL, VERDICT_LABEL, type Review, type Run, type Run
         <div><dt>Fix tries</dt><dd>{{ r.attempts }}</dd></div>
         <div><dt>Review rounds</dt><dd>{{ r.reviewRounds }}</dd></div>
         @if (r.checks) { <div><dt>CI</dt><dd><span class="checks-{{ r.checks }}">{{ checksLabel[r.checks] }}</span></dd></div> }
-        <div><dt>Cost</dt><dd>\${{ r.costUsd | number: '1.2-2' }}</dd></div>
+        <div><dt>Usage</dt><dd><app-usage [usage]="r.usage" [usd]="r.costUsd" /></dd></div>
         <div><dt>Started</dt><dd>{{ r.startedAt | date: 'medium' }}</dd></div>
         @if (r.prUrl) { <div><dt>Pull request</dt><dd><a [href]="r.prUrl" target="_blank" rel="noopener">{{ r.prUrl }}</a></dd></div> }
       </dl>

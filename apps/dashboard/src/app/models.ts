@@ -1,3 +1,22 @@
+/** Tokens one or more agent calls used; null where unknown (shown as n/a). */
+export interface Usage {
+  input: number;
+  output: number;
+  cache: number;
+}
+
+/** Spend over a period: USD from provider prices (for the euro estimate) and tokens. */
+export interface Spent {
+  usd: number;
+  usage: Usage | null;
+}
+
+/** A budget in tokens and optionally euros; 0 means no limit. */
+export interface Caps {
+  tokens: number;
+  eur: number;
+}
+
 export type AgentState = 'available' | 'working' | 'running_checks' | 'waiting_review' | 'addressing_review' | 'blocked' | 'paused';
 export type TicketStatus = 'todo' | 'in_progress' | 'in_review' | 'done';
 export type RunStatus = 'running' | 'reviewing' | 'in_review' | 'done' | 'blocked' | 'failed' | 'stopped';
@@ -51,6 +70,7 @@ export interface BacklogDraft {
   createdKeys: (string | null)[];
   error: string | null;
   costUsd: number;
+  usage: Usage | null;
   createdAt: string;
   approvedAt: string | null;
 }
@@ -78,6 +98,7 @@ export interface Run {
   status: RunStatus;
   attempts: number;
   costUsd: number;
+  usage: Usage | null;
   prUrl: string | null;
   error: string | null;
   area: string | null;
@@ -195,6 +216,7 @@ export interface RunBrief {
   checks: ChecksState | null;
   error: string | null;
   costUsd: number;
+  usage: Usage | null;
   since: string;
 }
 
@@ -209,8 +231,8 @@ export interface ProjectOverview {
   running: number;
   inReview: number;
   blocked: number;
-  spendToday: number;
-  dailyCap: number;
+  spendToday: Spent;
+  dailyCaps: Caps;
   autoAssign: boolean;
 }
 
@@ -219,7 +241,7 @@ export interface Overview {
   agents: Agent[];
   active: RunBrief[];
   needsYou: (RunBrief & { why: 'blocked' | 'review' | 'failed' })[];
-  spend: { today: number; last7Days: number; perRunCap: number; dailyCapDefault: number };
+  spend: { today: Spent; last7Days: Spent; perRunCaps: Caps; dailyCapsDefault: Caps };
   alertsUnread: number;
   activity: (RunEvent & { ticketKey: string; projectId: string; projectName: string })[];
 }
@@ -229,6 +251,7 @@ export interface TicketMetrics {
   ticketTitle: string;
   runs: number;
   costUsd: number;
+  usage: Usage | null;
   fixAttempts: number;
   reviewRounds: number;
   status: RunStatus;
@@ -247,6 +270,8 @@ export interface Metrics {
   meanReviewRounds: number | null;
   totalCostUsd: number;
   costPerTicketUsd: number | null;
+  totalUsage: Usage | null;
+  tokensPerTicket: number | null;
   tickets: TicketMetrics[];
 }
 
@@ -271,12 +296,12 @@ export interface ProjectTemplate {
 export interface ProjectSpend {
   projectId: string;
   name: string;
-  today: number;
-  last7Days: number;
-  total: number;
-  /** 0 means no cap. */
-  dailyCap: number;
-  ownCap: boolean;
+  today: Spent;
+  last7Days: Spent;
+  total: Spent;
+  dailyCaps: Caps;
+  /** The project's own caps as stored, or null where it uses the default. */
+  own: { tokens: string | null; eur: string | null };
 }
 
 export interface ChatAction {

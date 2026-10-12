@@ -1,14 +1,15 @@
 import { Component, computed, effect, inject, signal } from '@angular/core';
-import { DecimalPipe } from '@angular/common';
+
 import { RouterLink } from '@angular/router';
 import { Api } from '../api';
 import { Live } from '../live';
 import { CHECKS_LABEL, RUN_LABEL, VERDICT_LABEL, type PullRequestRow } from '../models';
+import { UsageView } from '../ui/usage';
 
 /** Every change waiting for or going through review, across projects. */
 @Component({
   selector: 'app-pull-requests',
-  imports: [RouterLink, DecimalPipe],
+  imports: [UsageView, RouterLink],
   template: `
     <header class="page-head">
       <h1>Pull requests</h1>
@@ -22,7 +23,7 @@ import { CHECKS_LABEL, RUN_LABEL, VERDICT_LABEL, type PullRequestRow } from '../
       <p class="empty">Nothing waiting for review. Changes show up here once a worker has finished a ticket.</p>
     } @else {
       <table class="table">
-        <thead><tr><th>Ticket</th><th>Status</th><th>Pull request</th><th>CI</th><th>Reviewer agent</th><th>Open comments</th><th>Rounds</th><th>Cost</th></tr></thead>
+        <thead><tr><th>Ticket</th><th>Status</th><th>Pull request</th><th>CI</th><th>Reviewer agent</th><th>Open comments</th><th>Rounds</th><th>Usage</th></tr></thead>
         <tbody>
           @for (r of visible(); track r.id) {
             <tr>
@@ -36,7 +37,7 @@ import { CHECKS_LABEL, RUN_LABEL, VERDICT_LABEL, type PullRequestRow } from '../
               <td>@if (r.reviewerVerdict) { <span class="verdict-{{ r.reviewerVerdict }}">{{ verdictLabel[r.reviewerVerdict] }}</span> } @else { <span class="muted">–</span> }</td>
               <td>{{ r.openComments || '–' }}</td>
               <td>{{ r.reviewRounds }}</td>
-              <td>\${{ r.costUsd | number: '1.2-2' }}</td>
+              <td><app-usage [usage]="r.usage" [usd]="r.costUsd" /></td>
             </tr>
           }
         </tbody>

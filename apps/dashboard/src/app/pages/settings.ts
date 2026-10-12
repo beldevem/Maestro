@@ -7,6 +7,7 @@ import { AiProviders, providerStatus } from '../components/ai-providers';
 import type { ProvidersInfo } from '../models';
 import { Icon } from '../ui/icon';
 import { Toasts } from '../ui/toast';
+import { Currency, formatTokens } from '../ui/usage';
 
 type StepId = 'ai' | 'code' | 'pm' | 'design' | 'limits' | 'notify';
 type Status = 'done' | 'optional' | 'todo';
@@ -62,12 +63,15 @@ const STEPS: Step[] = [
   },
   {
     id: 'limits', title: 'Workers and limits', icon: 'sliders',
-    blurb: 'How much runs at once and what it may spend. A run stops at its budget; a project at its daily budget starts nothing new until tomorrow.',
+    blurb: 'How much runs at once and how much it may use. Budgets count tokens, so they also stop free local models; a euro cap can be added on top. A run stops at its budget; a project at its daily budget starts nothing new until tomorrow.',
     secrets: [],
     fields: [
       { key: 'maxConcurrentRuns', label: 'Tickets worked on at once', hint: 'Across all projects. At least 1.', type: 'number', min: 1, step: 1 },
-      { key: 'budget.perRunUsd', label: 'Budget per run (USD)', hint: 'Covers all of a run’s agent calls. 0 means no limit.', type: 'number', min: 0, step: 0.5 },
-      { key: 'budget.projectDailyUsd', label: 'Daily budget per project (USD)', hint: 'A project can override it on its Runs tab. 0 means no limit.', type: 'number', min: 0, step: 1 },
+      { key: 'budget.perRunTokens', label: 'Budget per run (tokens)', hint: 'Input, output and cache tokens over all of a run’s agent calls. 0 means no limit.', type: 'number', min: 0, step: 100000 },
+      { key: 'budget.projectDailyTokens', label: 'Daily budget per project (tokens)', hint: 'A project can override it on its Runs tab. 0 means no limit.', type: 'number', min: 0, step: 1000000 },
+      { key: 'budget.perRunEur', label: 'Optional cap per run (€)', hint: 'From each provider’s prices; local models cost €0. 0 means no euro cap.', type: 'number', min: 0, step: 0.5 },
+      { key: 'budget.projectDailyEur', label: 'Optional daily cap per project (€)', hint: '0 means no euro cap.', type: 'number', min: 0, step: 1 },
+      { key: 'currency.eurPerUsd', label: 'USD → EUR rate (rough estimate)', hint: 'Provider prices are in USD; euro figures are only an estimate with this rate. Not fetched online.', type: 'number', min: 0, step: 0.01 },
       { key: 'worktrees.keepDays', label: 'Keep worktrees of finished runs (days)', hint: 'Branches always stay. -1 keeps worktrees forever.', type: 'number', min: -1, step: 1 },
     ],
     tests: [],
@@ -185,6 +189,7 @@ const STEPS: Step[] = [
 })
 export class SettingsPage {
   private readonly api = inject(Api);
+  private readonly currency = inject(Currency);
   private readonly toasts = inject(Toasts);
   private readonly router = inject(Router);
   readonly steps = STEPS;
@@ -278,7 +283,7 @@ export class SettingsPage {
       case 'code': return s === 'done' ? `${['GITHUB_TOKEN', 'GITLAB_TOKEN', 'BITBUCKET_APP_PASSWORD'].filter((n) => this.isSet(n)).length} connected` : 'Needed for GitHub, GitLab or Bitbucket';
       case 'pm': return s === 'done' ? 'Connected' : 'Optional';
       case 'design': return s === 'done' ? 'Figma connected' : 'Optional';
-      case 'limits': return `${this.saved()['maxConcurrentRuns'] ?? 3} at once · $${this.saved()['budget.perRunUsd'] ?? 5} per run`;
+      case 'limits': return `${this.saved()['maxConcurrentRuns'] ?? 3} at once · ${formatTokens(Number(this.saved()['budget.perRunTokens'] ?? 2000000))} per run`;
       case 'notify': return s === 'done' ? 'On' : 'Off';
     }
   }
@@ -303,6 +308,7 @@ export class SettingsPage {
     await this.attempt(async () => {
       await this.api.saveSettings(Object.fromEntries(s.fields.map((f) => [f.key, String(this.settings[f.key]).trim()])));
       this.saved.update((x) => ({ ...x, ...Object.fromEntries(s.fields.map((f) => [f.key, String(this.settings[f.key])])) }));
+      if (s.fields.some((f) => f.key === 'currency.eurPerUsd')) this.currency.load(true);
       this.toasts.ok(`${s.title} saved.`);
     });
   }

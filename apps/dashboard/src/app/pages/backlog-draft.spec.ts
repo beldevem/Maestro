@@ -5,7 +5,7 @@ import { BacklogDraftPanel } from './backlog-draft';
 
 const item = (title: string, dependsOn: number[] = []): BacklogItem => ({ title, description: '', acceptanceCriteria: '- ok', size: 'S', labels: [], dependsOn });
 const draft = (over: Partial<BacklogDraft> = {}): BacklogDraft => ({
-  id: 'd1', projectId: 'p1', status: 'draft', createdKeys: [], error: null, costUsd: 0.12, createdAt: '', approvedAt: null,
+  id: 'd1', projectId: 'p1', status: 'draft', createdKeys: [], error: null, costUsd: 0.12, usage: { input: 30_000, output: 2_000, cache: 0 }, createdAt: '', approvedAt: null,
   items: [item('A'), item('B', [0]), item('C', [0, 1]), item('D', [2])], ...over,
 });
 

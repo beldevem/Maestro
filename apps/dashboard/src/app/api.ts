@@ -1,5 +1,5 @@
 import { Injectable } from '@angular/core';
-import type { Agent, Alert, BacklogDraft, ChatAction, ChatMessage, ChatModels, Choice, Metrics, Overview, ProviderConfig, ProviderView, ProvidersInfo, Role, ProjectTemplate, ProjectSpend, BacklogItem, Project, PullRequestRow, Review, ReviewComment, Run, RunEvent, SecretInfo, Ticket, TicketStatus } from './models';
+import type { Agent, Alert, BacklogDraft, Caps, Usage, ChatAction, ChatMessage, ChatModels, Choice, Metrics, Overview, ProviderConfig, ProviderView, ProvidersInfo, Role, ProjectTemplate, ProjectSpend, BacklogItem, Project, PullRequestRow, Review, ReviewComment, Run, RunEvent, SecretInfo, Ticket, TicketStatus } from './models';
 
 export class ApiError extends Error {
   constructor(message: string, readonly status: number, readonly reasons: string[] = []) {
@@ -70,7 +70,7 @@ export class Api {
   globalChatHistory = () => this.call<ChatMessage[]>('GET', '/chat');
   clearGlobalChat = () => this.call('DELETE', '/chat');
   globalChat = (message: string, projectId?: string) =>
-    this.call<ChatMessage & { answer: string; costUsd: number; actions: ChatAction[] }>('POST', '/chat', { message, ...(projectId ? { projectId } : {}) });
+    this.call<ChatMessage & { answer: string; costUsd: number; usage: Usage | null; actions: ChatAction[] }>('POST', '/chat', { message, ...(projectId ? { projectId } : {}) });
   chatModels = () => this.call<ChatModels>('GET', '/chat/models');
   setChatModel = (choice: Choice | null) => this.call<{ current: Choice | null }>('PUT', '/chat/model', choice);
   confirmGlobalAction = (actionId: string) => this.call<{ message: string; runId?: string }>('POST', `/chat/actions/${actionId}`, {});
@@ -78,7 +78,7 @@ export class Api {
   chatHistory = (projectId: string) => this.call<ChatMessage[]>('GET', `/projects/${projectId}/chat`);
   clearChat = (projectId: string) => this.call('DELETE', `/projects/${projectId}/chat`);
   chat = (projectId: string, message: string) =>
-    this.call<ChatMessage & { answer: string; costUsd: number; actions: ChatAction[] }>('POST', `/projects/${projectId}/chat`, { message });
+    this.call<ChatMessage & { answer: string; costUsd: number; usage: Usage | null; actions: ChatAction[] }>('POST', `/projects/${projectId}/chat`, { message });
   confirmAction = (projectId: string, actionId: string) =>
     this.call<{ message: string; runId?: string }>('POST', `/projects/${projectId}/chat/actions/${actionId}`, {});
   dismissAction = (projectId: string, actionId: string) => this.call('DELETE', `/projects/${projectId}/chat/actions/${actionId}`);
@@ -88,7 +88,10 @@ export class Api {
   metrics = (projectId?: string, days = 0) =>
     this.call<Metrics>('GET', `/metrics?${new URLSearchParams({ ...(projectId ? { projectId } : {}), days: String(days) })}`);
   spend = () => this.call<ProjectSpend[]>('GET', '/spend');
-  setProjectBudget = (projectId: string, dailyUsd: number | null) => this.call<{ dailyCap: number }>('PUT', `/projects/${projectId}/budget`, { dailyUsd });
+  /** null puts a cap back to the default from Settings; a missing one stays as it is. */
+  setProjectBudget = (projectId: string, caps: { dailyTokens?: number | null; dailyEur?: number | null }) =>
+    this.call<{ dailyCaps: Caps }>('PUT', `/projects/${projectId}/budget`, caps);
+  currency = () => this.call<{ eurPerUsd: number }>('GET', '/currency');
 
   settings = () => this.call<{ settings: Record<string, string>; secrets: SecretInfo[]; secretsBackend: 'keychain' | 'file' }>('GET', '/settings');
   providers = () => this.call<ProvidersInfo>('GET', '/providers');

@@ -1,5 +1,5 @@
 import { Component, computed, effect, inject, input, signal } from '@angular/core';
-import { DatePipe, DecimalPipe } from '@angular/common';
+import { DatePipe } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { ActivatedRoute, Router, RouterLink } from '@angular/router';
 import { Api, ApiError } from '../api';
@@ -13,12 +13,13 @@ import { Icon } from '../ui/icon';
 import { Toasts } from '../ui/toast';
 import { ConnectorFields } from './connector-fields';
 import { deletionDetails } from './projects';
+import { UsageView, describeCaps, formatTokens } from '../ui/usage';
 
 type Tab = 'board' | 'knowledge' | 'workflow' | 'runs' | 'chat' | 'connectors';
 
 @Component({
   selector: 'app-project',
-  imports: [FormsModule, RouterLink, DatePipe, DecimalPipe, ConnectorFields, BacklogDraftPanel, ChatPanel, Icon, ProjectAi],
+  imports: [FormsModule, RouterLink, DatePipe, ConnectorFields, BacklogDraftPanel, ChatPanel, Icon, ProjectAi, UsageView],
   template: `
     @if (project(); as p) {
       <header class="page-head">
@@ -151,18 +152,21 @@ type Tab = 'board' | 'knowledge' | 'workflow' | 'runs' | 'chat' | 'connectors';
 
         @case ('runs') {
           <form class="toolbar" (ngSubmit)="saveBudget()">
-            <label>Daily budget for this project, USD
-              <input type="number" min="0" step="1" [(ngModel)]="budgetText" name="budget" placeholder="Default from Settings" />
+            <label>Daily budget, tokens
+              <input type="number" min="0" step="100000" [(ngModel)]="budgetTokens" name="budgetTokens" [placeholder]="'Default: ' + defaultTokens()" />
+            </label>
+            <label>Optional daily cap, €
+              <input type="number" min="0" step="0.5" [(ngModel)]="budgetEur" name="budgetEur" placeholder="Default from Settings" />
             </label>
             <button type="submit">Save budget</button>
             <button type="button" class="quiet" (click)="cleanupWorktrees()" title="Remove the worktree folders of failed, stopped and done runs; branches stay">Remove finished worktrees</button>
             @if (spend(); as s) {
-              <span class="meta">Spent today \${{ s.today | number: '1.2-2' }}{{ s.dailyCap > 0 ? ' of $' + (s.dailyCap | number: '1.0-2') : ', no limit' }} · 7 days \${{ s.last7Days | number: '1.2-2' }} · all time \${{ s.total | number: '1.2-2' }}</span>
+              <span class="meta">Today <app-usage [usage]="s.today.usage" [usd]="s.today.usd" /> (limit {{ describeCaps(s.dailyCaps) }}) · 7 days <app-usage [usage]="s.last7Days.usage" [usd]="s.last7Days.usd" /> · all time <app-usage [usage]="s.total.usage" [usd]="s.total.usd" /></span>
             }
           </form>
           @if (projectRuns().length === 0) { <p class="empty">No runs yet. Assign a ticket on the board.</p> } @else {
           <table class="table">
-            <thead><tr><th>Ticket</th><th>Status</th><th>Branch</th><th>Fix tries</th><th>Cost</th><th>Started</th><th></th></tr></thead>
+            <thead><tr><th>Ticket</th><th>Status</th><th>Branch</th><th>Fix tries</th><th>Usage</th><th>Started</th><th></th></tr></thead>
             <tbody>
               @for (r of projectRuns(); track r.id) {
                 <tr>
@@ -170,7 +174,7 @@ type Tab = 'board' | 'knowledge' | 'workflow' | 'runs' | 'chat' | 'connectors';
                   <td><span class="run run-{{ r.status }}">{{ runLabel[r.status] }}</span></td>
                   <td class="mono">{{ r.branch }}</td>
                   <td>{{ r.attempts }}</td>
-                  <td>\${{ r.costUsd | number: '1.2-2' }}</td>
+                  <td><app-usage [usage]="r.usage" [usd]="r.costUsd" /></td>
                   <td>{{ r.startedAt | date: 'short' }}</td>
                   <td>@if (r.prUrl) { <a [href]="r.prUrl" target="_blank" rel="noopener">PR</a> }</td>
                 </tr>
@@ -241,7 +245,9 @@ export class ProjectPage {
   readonly draft = signal<BacklogDraft | null>(null);
   readonly memoryPending = signal(false);
   readonly spend = signal<ProjectSpend | null>(null);
-  budgetText: number | null = null;
+  budgetTokens: number | null = null;
+  budgetEur: number | null = null;
+  readonly describeCaps = describeCaps;
   memoryText = '';
   newTicket = { title: '', description: '', acceptanceCriteria: '', size: '', labels: '' };
 
@@ -272,10 +278,17 @@ export class ProjectPage {
     });
   }
 
+  /** The default daily token cap, for the placeholder. */
+  defaultTokens(): string {
+    const s = this.spend();
+    return s && !s.own.tokens ? formatTokens(s.dailyCaps.tokens) : 'from Settings';
+  }
+
   async loadSpend(): Promise<void> {
     const s = (await this.api.spend().catch(() => [])).find((x) => x.projectId === this.id()) ?? null;
     this.spend.set(s);
-    this.budgetText = s?.ownCap ? s.dailyCap : null;
+    this.budgetTokens = s?.own.tokens ? Number(s.own.tokens) : null;
+    this.budgetEur = s?.own.eur ? Number(s.own.eur) : null;
   }
 
   async cleanupWorktrees(): Promise<void> {
@@ -284,11 +297,13 @@ export class ProjectPage {
   }
 
   async saveBudget(): Promise<void> {
-    const value = this.budgetText === null || String(this.budgetText) === '' ? null : Number(this.budgetText);
+    const value = (v: number | null) => (v === null || String(v) === '' ? null : Number(v));
+    const dailyTokens = value(this.budgetTokens);
+    const dailyEur = value(this.budgetEur);
     try {
-      await this.api.setProjectBudget(this.id(), value);
+      await this.api.setProjectBudget(this.id(), { dailyTokens: dailyTokens === null ? null : Math.round(dailyTokens), dailyEur });
       await this.loadSpend();
-      this.flash(value === null ? 'This project uses the default daily budget.' : 'Budget saved.');
+      this.flash(dailyTokens === null && dailyEur === null ? 'This project uses the default daily budget.' : 'Budget saved.');
     } catch (e) {
       this.flash((e as Error).message);
     }

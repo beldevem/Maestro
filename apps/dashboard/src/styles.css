@@ -443,3 +443,7 @@ input[aria-invalid='true'] { border-color: var(--bad); }
 .link-btn { border: 0; background: none; padding: 0; color: var(--accent); cursor: pointer; font: inherit; text-decoration: underline; }
 .field { display: flex; flex-direction: column; gap: 4px; margin-bottom: 12px; font-weight: 500; flex: 1; min-width: 160px; }
 .field-label { font-weight: 500; }
+/* Spend: tokens first, a rough euro estimate in grey beside them */
+.usage { display: inline-flex; align-items: baseline; gap: 6px; flex-wrap: wrap; }
+.usage-eur { color: var(--muted); font-size: 0.9em; font-weight: 400; }
+.tile-value .usage-eur { font-size: 0.55em; }

@@ -9,7 +9,7 @@ const secrets = [
   { name: 'GITHUB_TOKEN', label: 'GitHub token', help: '', set: true },
 ];
 const settings = () => Promise.resolve({
-  settings: { maxConcurrentRuns: '3', 'budget.perRunUsd': '5', 'budget.projectDailyUsd': '0', 'worktrees.keepDays': '3', 'model.worker': 'claude-sonnet-5-5' },
+  settings: { maxConcurrentRuns: '3', 'budget.perRunTokens': '2000000', 'budget.projectDailyTokens': '20000000', 'budget.perRunEur': '0', 'budget.projectDailyEur': '0', 'currency.eurPerUsd': '0.9', 'worktrees.keepDays': '3', 'model.worker': 'claude-sonnet-5-5' },
   secrets, secretsBackend: 'file' as const,
 });
 
@@ -43,7 +43,7 @@ describe('SettingsPage', () => {
       'Code hosts1 connected',
       '3 PM toolsOptional',
       '4 Design and docsOptional',
-      'Workers and limits3 at once · $5 per run',
+      'Workers and limits3 at once · 2M tokens per run',
       '6 NotificationsOff',
     ]);
     expect(text(f)).toContain('2 of 6 steps set up');
@@ -66,15 +66,15 @@ describe('SettingsPage', () => {
     expect(page.fieldError(limits.fields[0])).toBe('At least 1.');
     page.settings['maxConcurrentRuns'] = '2';
     await page.saveFields(limits);
-    expect(saveSettings).toHaveBeenCalledWith({ maxConcurrentRuns: '2', 'budget.perRunUsd': '5', 'budget.projectDailyUsd': '0', 'worktrees.keepDays': '3' });
+    expect(saveSettings).toHaveBeenCalledWith({ maxConcurrentRuns: '2', 'budget.perRunTokens': '2000000', 'budget.projectDailyTokens': '20000000', 'budget.perRunEur': '0', 'budget.projectDailyEur': '0', 'currency.eurPerUsd': '0.9', 'worktrees.keepDays': '3' });
   });
 
   it('shows why the engine refused a save', async () => {
-    const saveSettings = vi.fn().mockRejectedValue(new ApiError('budget.perRunUsd must be a number.', 400));
+    const saveSettings = vi.fn().mockRejectedValue(new ApiError('budget.perRunTokens must be a number.', 400));
     const f = await mount({ saveSettings } as Partial<Api>);
     const toasts = TestBed.inject(Toasts);
     await f.componentInstance.saveFields(f.componentInstance.steps.find((s) => s.id === 'limits')!);
-    expect(toasts.list().map((t) => [t.kind, t.text])).toEqual([['error', 'budget.perRunUsd must be a number.']]);
+    expect(toasts.list().map((t) => [t.kind, t.text])).toEqual([['error', 'budget.perRunTokens must be a number.']]);
   });
 
   it('tests a connection and shows the answer', async () => {

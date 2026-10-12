@@ -1,5 +1,5 @@
 import { Component, computed, inject, signal } from '@angular/core';
-import { DecimalPipe } from '@angular/common';
+
 import { FormsModule } from '@angular/forms';
 import { ActivatedRoute, Router, RouterLink } from '@angular/router';
 import { Api } from '../api';
@@ -8,6 +8,7 @@ import { Confirm } from '../ui/confirm';
 import { Icon } from '../ui/icon';
 import { Toasts } from '../ui/toast';
 import { ConnectorFields, emptyConnectors, type ConnectorModel } from './connector-fields';
+import { Currency, UsageView, overCaps } from '../ui/usage';
 
 type WizardStep = 'basics' | 'code' | 'tickets' | 'context' | 'review';
 const WIZARD: { id: WizardStep; title: string }[] = [
@@ -32,7 +33,7 @@ export function deletionDetails(p: Pick<Project, 'pm'>): string[] {
 /** All projects, with a guided way to add one. */
 @Component({
   selector: 'app-projects',
-  imports: [FormsModule, RouterLink, ConnectorFields, DecimalPipe, Icon],
+  imports: [FormsModule, RouterLink, ConnectorFields, Icon, UsageView],
   template: `
     <header class="page-head">
       <div>
@@ -141,8 +142,8 @@ export function deletionDetails(p: Pick<Project, 'pm'>): string[] {
             @if (p.description) { <p>{{ p.description }}</p> }
             <p class="meta">{{ hostLabel[p.codeHost.provider] }} · {{ p.codeHost.provider === 'local' ? p.codeHost.localPath : p.codeHost.repo }} · tickets in {{ pmLabel[p.pm.provider] }}</p>
             @if (spendFor(p.id); as s) {
-              <p class="meta" [class.warn]="s.dailyCap > 0 && s.today >= s.dailyCap">
-                Today \${{ s.today | number: '1.2-2' }}{{ s.dailyCap > 0 ? ' of $' + (s.dailyCap | number: '1.0-2') : '' }} · 7 days \${{ s.last7Days | number: '1.2-2' }}
+              <p class="meta" [class.warn]="isOver(s)">
+                Today <app-usage [usage]="s.today.usage" [usd]="s.today.usd" /> · 7 days <app-usage [usage]="s.last7Days.usage" [usd]="s.last7Days.usd" />
               </p>
             }
             <div class="card-actions">
@@ -159,6 +160,7 @@ export function deletionDetails(p: Pick<Project, 'pm'>): string[] {
   `,
 })
 export class ProjectsPage {
+  private readonly currency = inject(Currency);
   private readonly api = inject(Api);
   private readonly router = inject(Router);
   private readonly toasts = inject(Toasts);
@@ -204,6 +206,10 @@ export class ProjectsPage {
 
   gateNames(t: ProjectTemplate): string {
     return t.gates.map((g) => g.name).join(', ');
+  }
+
+  isOver(s: ProjectSpend): boolean {
+    return overCaps(s.today, s.dailyCaps, this.currency.eurPerUsd());
   }
 
   spendFor(id: string): ProjectSpend | undefined {

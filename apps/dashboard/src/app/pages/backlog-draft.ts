@@ -1,18 +1,19 @@
 import { Component, effect, inject, input, output, signal } from '@angular/core';
-import { DecimalPipe } from '@angular/common';
+
 import { FormsModule } from '@angular/forms';
 import { Api } from '../api';
 import type { BacklogDraft, BacklogItem } from '../models';
 import { Confirm } from '../ui/confirm';
+import { UsageView } from '../ui/usage';
 
 /** The planner's proposed backlog: edit it, then create the tickets or throw it away. */
 @Component({
   selector: 'app-backlog-draft',
-  imports: [FormsModule, DecimalPipe],
+  imports: [UsageView, FormsModule],
   template: `
     <section class="panel draft">
       <div class="draft-head">
-        <h2>Backlog draft <span class="count">{{ items().length }} tickets · \${{ draft().costUsd | number: '1.2-2' }}</span></h2>
+        <h2>Backlog draft <span class="count">{{ items().length }} tickets · <app-usage [usage]="draft().usage" [usd]="draft().costUsd" /></span></h2>
         <span class="hint">Edit before creating. Nothing is in {{ pmName() }} yet.</span>
       </div>
       @if (started()) {
