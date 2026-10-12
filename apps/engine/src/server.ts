@@ -19,6 +19,7 @@ import { git } from './proc.js';
 import { budgetState, dailyCap, perRunCap, startOfToday, usd } from './budget.js';
 import { DESIGN_DIR } from './adapters/design/index.js';
 import { readBaseMemory } from './memory.js';
+import { testConnection } from './connection-tests.js';
 import { invalidSetting } from './settings.js';
 import { TEMPLATES, templateById, workflowFor } from './templates.js';
 import { computeMetrics } from './metrics.js';
@@ -627,6 +628,10 @@ export async function buildServer(d: ServerDeps): Promise<FastifyInstance> {
     if (problems.length) throw new Error(problems.join(' '));
     for (const [k, v] of Object.entries(body)) d.store.setSetting(k, v);
     return { ok: true };
+  });
+  app.post<{ Params: { provider: string } }>('/api/settings/test/:provider', async (req) => {
+    const provider = z.enum(['anthropic', 'github', 'gitlab', 'bitbucket', 'trello', 'figma']).parse(req.params.provider);
+    return testConnection(provider, d.secrets);
   });
   app.put<{ Params: { name: string } }>('/api/secrets/:name', async (req) => {
     const { value } = z.object({ value: z.string().min(1) }).parse(req.body);

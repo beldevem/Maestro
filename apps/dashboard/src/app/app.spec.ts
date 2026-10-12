@@ -15,7 +15,7 @@ describe('App', () => {
     const el: HTMLElement = fixture.nativeElement;
     expect(el.querySelector('.brand')?.textContent).toContain('Maestro');
     expect(el.textContent).toContain('Engine offline');
-    expect([...el.querySelectorAll('.nav a')].map((a) => a.textContent?.trim())).toEqual(['Agents', 'Projects', 'Pull requests', 'Metrics', 'Alerts 2', 'Settings']);
+    expect([...el.querySelectorAll('.nav a')].map((a) => a.getAttribute('aria-label'))).toEqual(['Dashboard', 'Projects', 'Workers', 'Pull requests', 'Metrics', 'Alerts', 'Settings']);
     expect(el.querySelector('.badge')?.textContent).toBe('2');
     expect(live.start).toHaveBeenCalled();
   });

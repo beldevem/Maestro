@@ -1,15 +1,23 @@
 <div class="shell">
-  <aside class="nav">
-    <div class="brand">Maestro</div>
-    <a routerLink="/agents" routerLinkActive="active">Agents</a>
-    <a routerLink="/projects" routerLinkActive="active">Projects</a>
-    <a routerLink="/pull-requests" routerLinkActive="active">Pull requests</a>
-    <a routerLink="/metrics" routerLinkActive="active">Metrics</a>
-    <a routerLink="/alerts" routerLinkActive="active">Alerts @if (live.unread()) { <span class="badge">{{ live.unread() }}</span> }</a>
-    <a routerLink="/settings" routerLinkActive="active">Settings</a>
-    <p class="conn" [class.on]="live.connected()">{{ live.connected() ? 'Engine connected' : 'Engine offline' }}</p>
+  <aside class="nav" aria-label="Main">
+    <div class="brand"><span class="brand-mark" aria-hidden="true">M</span><span class="brand-name">Maestro</span></div>
+    @for (item of nav; track item.path) {
+      <a [routerLink]="item.path" routerLinkActive="active" [routerLinkActiveOptions]="{ exact: item.path === '/' }" [attr.aria-label]="item.label">
+        <app-icon [name]="item.icon" />
+        <span class="nav-label">{{ item.label }}</span>
+        @if (item.path === '/alerts' && live.unread()) { <span class="badge">{{ live.unread() }}</span> }
+      </a>
+    }
+    <div class="nav-foot">
+      <p class="conn" [class.on]="live.connected()"><span class="nav-label">{{ live.connected() ? 'Engine connected' : 'Engine offline' }}</span></p>
+      <button class="icon-btn" (click)="theme.cycle()" [attr.aria-label]="'Theme: ' + theme.theme()" [title]="'Theme: ' + theme.theme()">
+        <app-icon [name]="theme.theme() === 'dark' ? 'moon' : theme.theme() === 'light' ? 'sun' : 'sparkles'" />
+      </button>
+    </div>
   </aside>
   <main class="content">
     <router-outlet />
   </main>
 </div>
+<app-toasts />
+<app-confirm />

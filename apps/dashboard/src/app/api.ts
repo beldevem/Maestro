@@ -1,5 +1,5 @@
 import { Injectable } from '@angular/core';
-import type { Agent, Alert, BacklogDraft, ChatAction, ChatMessage, Metrics, ProjectTemplate, ProjectSpend, BacklogItem, Project, PullRequestRow, Review, ReviewComment, Run, RunEvent, SecretInfo, Ticket, TicketStatus } from './models';
+import type { Agent, Alert, BacklogDraft, ChatAction, ChatMessage, Metrics, Overview, ProjectTemplate, ProjectSpend, BacklogItem, Project, PullRequestRow, Review, ReviewComment, Run, RunEvent, SecretInfo, Ticket, TicketStatus } from './models';
 
 export class ApiError extends Error {
   constructor(message: string, readonly status: number, readonly reasons: string[] = []) {
@@ -66,6 +66,13 @@ export class Api {
   agentAction = (id: string, action: 'pause' | 'resume' | 'unblock') => this.call<Agent>('POST', `/agents/${id}/action`, { action });
   deleteAgent = (id: string) => this.call('DELETE', `/agents/${id}`);
 
+  overview = () => this.call<Overview>('GET', '/overview');
+  globalChatHistory = () => this.call<ChatMessage[]>('GET', '/chat');
+  clearGlobalChat = () => this.call('DELETE', '/chat');
+  globalChat = (message: string, projectId?: string) =>
+    this.call<ChatMessage & { answer: string; costUsd: number; actions: ChatAction[] }>('POST', '/chat', { message, ...(projectId ? { projectId } : {}) });
+  confirmGlobalAction = (actionId: string) => this.call<{ message: string; runId?: string }>('POST', `/chat/actions/${actionId}`, {});
+  dismissGlobalAction = (actionId: string) => this.call('DELETE', `/chat/actions/${actionId}`);
   chatHistory = (projectId: string) => this.call<ChatMessage[]>('GET', `/projects/${projectId}/chat`);
   clearChat = (projectId: string) => this.call('DELETE', `/projects/${projectId}/chat`);
   chat = (projectId: string, message: string) =>
@@ -82,6 +89,7 @@ export class Api {
   setProjectBudget = (projectId: string, dailyUsd: number | null) => this.call<{ dailyCap: number }>('PUT', `/projects/${projectId}/budget`, { dailyUsd });
 
   settings = () => this.call<{ settings: Record<string, string>; secrets: SecretInfo[]; secretsBackend: 'keychain' | 'file' }>('GET', '/settings');
+  testConnection = (provider: string) => this.call<{ ok: boolean; message: string }>('POST', `/settings/test/${provider}`, {});
   saveSettings = (s: Record<string, string>) => this.call('PUT', '/settings', s);
   setSecret = (name: string, value: string) => this.call('PUT', `/secrets/${name}`, { value });
   deleteSecret = (name: string) => this.call('DELETE', `/secrets/${name}`);

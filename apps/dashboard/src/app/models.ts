@@ -128,6 +128,46 @@ export const CHECKS_LABEL: Record<ChecksState, string> = {
   none: 'No checks',
 };
 
+export interface RunBrief {
+  runId: string;
+  projectId: string;
+  projectName: string;
+  ticketKey: string;
+  ticketTitle: string;
+  status: RunStatus;
+  prUrl: string | null;
+  checks: ChecksState | null;
+  error: string | null;
+  costUsd: number;
+  since: string;
+}
+
+export interface ProjectOverview {
+  id: string;
+  name: string;
+  description: string;
+  codeHost: string;
+  pm: string;
+  /** null when the PM tool could not be reached. */
+  tickets: Record<TicketStatus, number> | null;
+  running: number;
+  inReview: number;
+  blocked: number;
+  spendToday: number;
+  dailyCap: number;
+  autoAssign: boolean;
+}
+
+export interface Overview {
+  projects: ProjectOverview[];
+  agents: Agent[];
+  active: RunBrief[];
+  needsYou: (RunBrief & { why: 'blocked' | 'review' | 'failed' })[];
+  spend: { today: number; last7Days: number; perRunCap: number; dailyCapDefault: number };
+  alertsUnread: number;
+  activity: (RunEvent & { ticketKey: string; projectId: string; projectName: string })[];
+}
+
 export interface TicketMetrics {
   ticketKey: string;
   ticketTitle: string;

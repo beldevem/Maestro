@@ -3,6 +3,7 @@ import { DecimalPipe } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { Api } from '../api';
 import type { BacklogDraft, BacklogItem } from '../models';
+import { Confirm } from '../ui/confirm';
 
 /** The planner's proposed backlog: edit it, then create the tickets or throw it away. */
 @Component({
@@ -72,6 +73,7 @@ import type { BacklogDraft, BacklogItem } from '../models';
 })
 export class BacklogDraftPanel {
   private readonly api = inject(Api);
+  private readonly confirmDialog = inject(Confirm);
   readonly draft = input.required<BacklogDraft>();
   readonly pmName = input('Maestro');
   /** Emitted once the draft is approved or discarded, so the board reloads. */
@@ -146,7 +148,7 @@ export class BacklogDraftPanel {
   }
 
   async discard(): Promise<void> {
-    if (!confirm('Discard this backlog draft?')) return;
+    if (!(await this.confirmDialog.ask({ title: 'Discard this backlog draft?', body: 'No tickets are created. You can plan again later.', confirm: 'Discard', danger: true }))) return;
     this.busy.set(true);
     try {
       await this.api.discardDraft(this.draft().id);

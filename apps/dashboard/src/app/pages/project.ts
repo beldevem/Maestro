@@ -1,25 +1,46 @@
 import { Component, computed, effect, inject, input, signal } from '@angular/core';
 import { DatePipe, DecimalPipe } from '@angular/common';
 import { FormsModule } from '@angular/forms';
-import { Router, RouterLink } from '@angular/router';
+import { ActivatedRoute, Router, RouterLink } from '@angular/router';
 import { Api, ApiError } from '../api';
 import { Live } from '../live';
-import { RUN_LABEL, STATUS_LABEL, type BacklogDraft, type ChatAction, type ChatMessage, type ProjectSpend, type Project, type Ticket, type TicketStatus } from '../models';
+import { RUN_LABEL, STATUS_LABEL, type BacklogDraft, type ProjectSpend, type Project, type Ticket, type TicketStatus } from '../models';
 import { BacklogDraftPanel } from './backlog-draft';
+import { ChatPanel } from '../components/chat-panel';
+import { Confirm } from '../ui/confirm';
+import { Icon } from '../ui/icon';
+import { Toasts } from '../ui/toast';
 import { ConnectorFields } from './connector-fields';
+import { deletionDetails } from './projects';
 
 type Tab = 'board' | 'knowledge' | 'workflow' | 'runs' | 'chat' | 'connectors';
 
 @Component({
   selector: 'app-project',
-  imports: [FormsModule, RouterLink, DatePipe, DecimalPipe, ConnectorFields, BacklogDraftPanel],
+  imports: [FormsModule, RouterLink, DatePipe, DecimalPipe, ConnectorFields, BacklogDraftPanel, ChatPanel, Icon],
   template: `
     @if (project(); as p) {
       <header class="page-head">
-        <div>
-          <a routerLink="/projects" class="crumb">Projects</a>
-          <h1>{{ p.name }}</h1>
-        </div>
+        @if (editingHead()) {
+          <form class="head-edit" (ngSubmit)="saveHead()">
+            <label class="sr-only" for="pname">Name</label>
+            <input id="pname" [(ngModel)]="head.name" name="pname" required maxlength="60" />
+            <label class="sr-only" for="pdesc">Description</label>
+            <input id="pdesc" [(ngModel)]="head.description" name="pdesc" placeholder="Description" />
+            <button class="primary" type="submit" [disabled]="!head.name.trim()">Save</button>
+            <button type="button" class="quiet" (click)="editingHead.set(false)">Cancel</button>
+          </form>
+        } @else {
+          <div>
+            <a routerLink="/projects" class="crumb">Projects</a>
+            <h1>{{ p.name }}</h1>
+            @if (p.description) { <p class="page-sub">{{ p.description }}</p> }
+          </div>
+          <div class="row head-actions">
+            <button class="icon-btn" (click)="startHeadEdit(p)" aria-label="Edit name and description" title="Edit name and description"><app-icon name="edit" /></button>
+            <button class="icon-btn" (click)="remove()" aria-label="Delete project" title="Delete project"><app-icon name="trash" /></button>
+          </div>
+        }
       </header>
       <nav class="tabs">
         @for (t of tabs; track t.id) {
@@ -158,39 +179,8 @@ type Tab = 'board' | 'knowledge' | 'workflow' | 'runs' | 'chat' | 'connectors';
         }
 
         @case ('chat') {
-          <section class="chat panel">
-            @if (messages().length === 0) {
-              <p class="hint">Ask about this project: tickets, why an agent is blocked, how the code works. Ask it to do something and it proposes the action for you to confirm.</p>
-            } @else {
-              <button type="button" class="quiet chat-clear" (click)="clearChat()">Clear conversation</button>
-            }
-            @for (m of messages(); track $index) {
-              <div class="msg msg-{{ m.role }}">{{ m.content }}</div>
-              @for (a of m.actions ?? []; track a.id) {
-                <div class="action-card">
-                  <span>{{ a.summary }}</span>
-                  @switch (a.state) {
-                    @case ('running') { <span class="spinner"></span> }
-                    @case ('done') {
-                      <span class="ok">{{ a.result }}</span>
-                      @if (a.runId) { <a [routerLink]="['/runs', a.runId]">Open run</a> }
-                    }
-                    @case ('failed') { <span class="error">{{ a.result }}</span> }
-                    @case ('dismissed') { <span class="muted">Dismissed</span> }
-                    @default {
-                      <button class="primary" (click)="confirmAction(a)">Confirm</button>
-                      <button class="quiet" (click)="dismissAction(a)">Dismiss</button>
-                    }
-                  }
-                </div>
-              }
-            }
-            @if (thinking()) { <div class="msg msg-assistant muted">Thinking…</div> }
-            <form class="chat-input" (ngSubmit)="send()">
-              <input [(ngModel)]="question" name="q" placeholder="Why is the login ticket blocked?" [disabled]="thinking()" />
-              <button class="primary" type="submit" [disabled]="!question.trim() || thinking()">Send</button>
-            </form>
-          </section>
+          <app-chat-panel [projects]="[{ id: p.id, name: p.name }]" [initialScope]="p.id" />
+          <p class="hint">This is the Dashboard's assistant, focused on {{ p.name }}. <a routerLink="/" [queryParams]="{ project: p.id }">Open it on the Dashboard</a> to ask across projects.</p>
         }
 
         @case ('connectors') {
@@ -199,7 +189,7 @@ type Tab = 'board' | 'knowledge' | 'workflow' | 'runs' | 'chat' | 'connectors';
             <div class="row">
               <button class="primary" type="submit">Save</button>
               <button type="button" (click)="check()">Test connections</button>
-              <button type="button" class="danger" (click)="remove()">Delete project</button>
+              <button type="button" class="danger" (click)="remove()"><app-icon name="trash" [size]="14" /> Delete project</button>
             </div>
             @for (c of checks(); track c.name) {
               <p [class.ok]="c.ok" [class.error]="!c.ok">{{ c.name }}: {{ c.message }}</p>
@@ -216,6 +206,8 @@ export class ProjectPage {
   private readonly api = inject(Api);
   private readonly live = inject(Live);
   private readonly router = inject(Router);
+  private readonly toasts = inject(Toasts);
+  private readonly confirmDialog = inject(Confirm);
   readonly id = input.required<string>();
 
   readonly tabs: { id: Tab; label: string }[] = [
@@ -232,14 +224,14 @@ export class ProjectPage {
   readonly runLabel = RUN_LABEL;
 
   readonly project = signal<Project | null>(null);
-  readonly tab = signal<Tab>('board');
+  readonly tab = signal<Tab>((inject(ActivatedRoute).snapshot.queryParamMap.get('tab') as Tab) || 'board');
   readonly tickets = signal<Ticket[]>([]);
   readonly ticketError = signal('');
   readonly notice = signal('');
   readonly showNewTicket = signal(false);
   readonly checks = signal<{ name: string; ok: boolean; message: string }[]>([]);
-  readonly messages = signal<ChatMessage[]>([]);
-  readonly thinking = signal(false);
+  readonly editingHead = signal(false);
+  head = { name: '', description: '' };
   readonly autoAssign = signal(false);
   readonly planning = signal(false);
   readonly planError = signal('');
@@ -249,7 +241,6 @@ export class ProjectPage {
   budgetText: number | null = null;
   memoryText = '';
   newTicket = { title: '', description: '', acceptanceCriteria: '', size: '', labels: '' };
-  question = '';
 
   readonly projectRuns = computed(() => this.live.runs().filter((r) => r.projectId === this.id()));
   readonly byStatus = computed(() => {
@@ -266,7 +257,6 @@ export class ProjectPage {
       void this.loadTickets();
       void this.loadDraft();
       void this.loadMemory();
-      void this.api.chatHistory(id).then((m) => this.messages.set(m)).catch(() => undefined);
       void this.loadSpend();
       void this.api.autoAssign(id).then((a) => this.autoAssign.set(a.enabled));
     });
@@ -395,7 +385,10 @@ export class ProjectPage {
 
   async start(t: Ticket): Promise<void> {
     const problems = [...(t.blockedBy.length ? [`It waits on ${t.blockedBy.join(', ')}.`] : []), ...t.notReady];
-    if (problems.length && !confirm(`${t.key} is not ready:\n${problems.join('\n')}\n\nStart anyway?`)) return;
+    if (problems.length) {
+      const ok = await this.confirmDialog.ask({ title: `${t.key} is not ready`, body: 'Start it anyway?', details: problems, confirm: 'Start anyway' });
+      if (!ok) return;
+    }
     try {
       const run = await this.api.startTicket(this.id(), t.key, t.notReady.length > 0);
       await this.router.navigate(['/runs', run.id]);
@@ -408,10 +401,10 @@ export class ProjectPage {
   async save(patch: Partial<Project>): Promise<void> {
     try {
       this.project.set(await this.api.updateProject(this.id(), patch));
-      this.flash('Saved.');
+      this.toasts.ok('Saved.');
       if (patch.pm) void this.loadTickets();
     } catch (e) {
-      this.flash((e as Error).message);
+      this.toasts.error((e as Error).message);
     }
   }
 
@@ -421,57 +414,31 @@ export class ProjectPage {
     this.checks.set(Object.entries(res).map(([k, v]) => ({ name: names[k] ?? k, ...v })));
   }
 
+  startHeadEdit(p: Project): void {
+    this.head = { name: p.name, description: p.description };
+    this.editingHead.set(true);
+  }
+
+  async saveHead(): Promise<void> {
+    await this.save({ name: this.head.name.trim(), description: this.head.description.trim() });
+    this.editingHead.set(false);
+  }
+
   async remove(): Promise<void> {
-    if (!confirm('Delete this project from Maestro? Your repository and PM tool are not touched.')) return;
-    await this.api.deleteProject(this.id());
-    await this.router.navigate(['/projects']);
-  }
-
-  async send(): Promise<void> {
-    const message = this.question.trim();
-    if (!message) return;
-    this.messages.update((m) => [...m, { role: 'user', content: message }]);
-    this.question = '';
-    this.thinking.set(true);
+    const p = this.project();
+    if (!p) return;
+    const ok = await this.confirmDialog.ask({ title: `Delete ${p.name}?`, body: 'This removes the project from Maestro:', details: deletionDetails(p), confirm: 'Delete project', danger: true });
+    if (!ok) return;
     try {
-      const { answer, actions } = await this.api.chat(this.id(), message);
-      this.messages.update((m) => [...m, { role: 'assistant', content: answer, actions: actions.map((a) => ({ ...a, state: 'pending' as const })) }]);
+      await this.api.deleteProject(this.id());
+      this.toasts.ok(`${p.name} deleted.`);
+      await this.router.navigate(['/projects']);
     } catch (e) {
-      this.messages.update((m) => [...m, { role: 'assistant', content: `Couldn't answer: ${(e as Error).message}` }]);
-    } finally {
-      this.thinking.set(false);
+      this.toasts.error((e as Error).message);
     }
-  }
-
-  async confirmAction(a: ChatAction): Promise<void> {
-    this.setAction(a.id, { state: 'running' });
-    try {
-      const res = await this.api.confirmAction(this.id(), a.id);
-      this.setAction(a.id, { state: 'done', result: res.message, runId: res.runId });
-      void this.loadTickets();
-      if (a.type === 'plan_backlog') setTimeout(() => void this.loadDraft(), 5000);
-    } catch (e) {
-      this.setAction(a.id, { state: 'failed', result: (e as Error).message });
-    }
-  }
-
-  async clearChat(): Promise<void> {
-    if (!confirm('Clear this conversation? Proposed actions that were not confirmed are dropped.')) return;
-    await this.api.clearChat(this.id());
-    this.messages.set([]);
-  }
-
-  async dismissAction(a: ChatAction): Promise<void> {
-    this.setAction(a.id, { state: 'dismissed' });
-    await this.api.dismissAction(this.id(), a.id).catch(() => undefined);
-  }
-
-  private setAction(id: string, patch: Partial<ChatAction>): void {
-    this.messages.update((ms) => ms.map((m) => (m.actions?.some((a) => a.id === id) ? { ...m, actions: m.actions.map((a) => (a.id === id ? { ...a, ...patch } : a)) } : m)));
   }
 
   private flash(text: string): void {
-    this.notice.set(text);
-    setTimeout(() => this.notice.set(''), 3000);
+    this.toasts.info(text);
   }
 }

@@ -4,6 +4,7 @@ import { FormsModule } from '@angular/forms';
 import { RouterLink } from '@angular/router';
 import { Api } from '../api';
 import { Live } from '../live';
+import { Confirm } from '../ui/confirm';
 import { CHECKS_LABEL, RUN_LABEL, VERDICT_LABEL, type Review, type Run, type RunEvent } from '../models';
 
 @Component({
@@ -94,6 +95,7 @@ import { CHECKS_LABEL, RUN_LABEL, VERDICT_LABEL, type Review, type Run, type Run
 })
 export class RunPage {
   private readonly api = inject(Api);
+  private readonly confirmDialog = inject(Confirm);
   private readonly live = inject(Live);
   readonly id = input.required<string>();
   readonly runLabel = RUN_LABEL;
@@ -140,12 +142,12 @@ export class RunPage {
   }
 
   async approve(): Promise<void> {
-    if (!confirm('Mark this ticket done? The worktree folder is removed; the branch stays.')) return;
+    if (!(await this.confirmDialog.ask({ title: 'Mark this ticket done?', body: 'The ticket moves to done and the worktree folder is removed. The branch stays.', confirm: 'Mark done' }))) return;
     await this.sendReview('approve', '');
   }
 
   async merge(): Promise<void> {
-    if (!confirm('Merge this branch into the base branch of your local repository and mark the ticket done?')) return;
+    if (!(await this.confirmDialog.ask({ title: 'Merge into the base branch?', body: 'The branch is merged into the base branch of your local repository and the ticket is marked done. Nothing happens if the working tree has uncommitted changes or the merge conflicts.', confirm: 'Merge' }))) return;
     this.sending.set(true);
     this.reviewError.set('');
     try {
@@ -182,7 +184,7 @@ export class RunPage {
   }
 
   async cleanup(): Promise<void> {
-    if (!confirm('Remove this run\'s worktree folder? The branch stays.')) return;
+    if (!(await this.confirmDialog.ask({ title: 'Remove the worktree folder?', body: 'The folder with this run’s checkout is deleted. The branch and its commits stay.', confirm: 'Remove', danger: true }))) return;
     await this.api.removeWorktree(this.id());
     this.diff.set('Worktree removed.');
   }

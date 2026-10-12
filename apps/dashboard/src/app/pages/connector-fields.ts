@@ -19,6 +19,7 @@ export function emptyConnectors(): ConnectorModel {
   imports: [FormsModule],
   template: `
     @let m = model();
+    @if (show('codeHost')) {
     <fieldset>
       <legend>Code host</legend>
       <label>Provider
@@ -46,7 +47,9 @@ export function emptyConnectors(): ConnectorModel {
       }
       <label>Default branch <input [(ngModel)]="m.codeHost.defaultBranch" name="ch-branch" /></label>
     </fieldset>
+    }
 
+    @if (show('pm')) {
     <fieldset>
       <legend>Project management</legend>
       <label>Tickets live in
@@ -79,7 +82,9 @@ export function emptyConnectors(): ConnectorModel {
         <p class="hint">Add the Trello API key and token in Settings.</p>
       }
     </fieldset>
+    }
 
+    @if (show('design')) {
     <fieldset>
       <legend>Design</legend>
       <label>Design tool
@@ -93,7 +98,9 @@ export function emptyConnectors(): ConnectorModel {
         <p class="hint">Tickets that link a Figma frame (a URL with node-id) give the worker that frame's names, text and a PNG. UI tickets (labels ui, frontend or area:ui) with no link get this file's pages and frames. Add the Figma token in Settings.</p>
       }
     </fieldset>
+    }
 
+    @if (show('docs')) {
     <fieldset>
       <legend>Docs</legend>
       <label>Docs tool
@@ -113,8 +120,15 @@ export function emptyConnectors(): ConnectorModel {
         <p class="hint">The planner and workers read these pages, plus any Confluence page linked in the requirements or a ticket. Uses {{ m.pm.provider === 'jira' ? 'the Jira site and email above' : 'this site and email' }} with the Atlassian API token from Settings.</p>
       }
     </fieldset>
+    }
   `,
 })
 export class ConnectorFields {
   readonly model = input.required<ConnectorModel>();
+  /** Show one section only (for the new-project steps); all of them when empty. */
+  readonly only = input<'' | 'codeHost' | 'pm' | 'design' | 'docs'>('');
+
+  show(section: 'codeHost' | 'pm' | 'design' | 'docs'): boolean {
+    return !this.only() || this.only() === section;
+  }
 }
