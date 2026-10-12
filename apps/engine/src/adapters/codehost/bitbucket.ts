@@ -2,6 +2,7 @@ import { join } from 'node:path';
 import type { ChecksState, Project } from '../../types.js';
 import { HttpGit, reviewText } from './http-git.js';
 import { MAESTRO_MARK, type CodeHostAdapter, type FeedbackItem, type PostedReview, type PullRequestInput, type PullRequestRef, type PullRequestStatus, type ReviewToPost } from './types.js';
+import { httpFetch } from '../../http.js';
 
 const API = 'https://api.bitbucket.org/2.0';
 const STATUS: Record<string, ChecksState> = { SUCCESSFUL: 'success', FAILED: 'failure', STOPPED: 'failure', INPROGRESS: 'pending' };
@@ -13,7 +14,7 @@ export class BitbucketCodeHost implements CodeHostAdapter {
   constructor(
     private readonly credentials: () => { user: string; secret: string } | undefined,
     private readonly reposDir: string,
-    private readonly fetchImpl: typeof fetch = fetch,
+    private readonly fetchImpl: typeof fetch = httpFetch,
   ) {}
 
   private readonly http = new HttpGit('https://bitbucket.org', () => this.credentials());

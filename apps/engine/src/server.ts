@@ -1,3 +1,4 @@
+import { log, redact } from './log.js';
 import Fastify, { type FastifyInstance } from 'fastify';
 import cors from '@fastify/cors';
 import fastifyStatic from '@fastify/static';
@@ -117,11 +118,14 @@ export async function buildServer(d: ServerDeps): Promise<FastifyInstance> {
     }
   });
 
-  app.setErrorHandler((err, _req, reply) => {
+  app.setErrorHandler((err, req, reply) => {
     if (err instanceof z.ZodError) return reply.status(400).send({ error: err.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; ') });
     if (err instanceof NotReadyError) return reply.status(409).send({ error: err.message, reasons: err.reasons });
     const status = (err as { statusCode?: number }).statusCode ?? 400;
-    return reply.status(status).send({ error: err instanceof Error ? err.message : String(err) });
+    const message = redact(err instanceof Error ? err.message : String(err));
+    if (status >= 500) log.error('Request failed', { method: req.method, url: req.url.split('?')[0], status, error: message });
+    else log.debug('Request refused', { method: req.method, url: req.url.split('?')[0], status, error: message });
+    return reply.status(status).send({ error: message });
   });
 
   const project = (id: string) => {
@@ -146,7 +150,7 @@ export async function buildServer(d: ServerDeps): Promise<FastifyInstance> {
       const tickets = await pmFor(p, d.store, d.secrets).listTickets();
       // Planning reads the code, so a remote repository is cloned first; without it the planner works from the requirements alone.
       const repo = await codeHostFor(p, d.secrets, d.reposDir).ensureRepo(p).catch((e: Error) => {
-        console.error(`Planning ${p.name} without the code: ${e.message}`);
+        log.error(`Planning ${p.name} without the code: ${e.message}`);
         return '';
       });
       const cwd = repo && existsSync(repo) ? repo : tmpdir();
@@ -208,12 +212,23 @@ export async function buildServer(d: ServerDeps): Promise<FastifyInstance> {
         void d.orchestrator.tick();
         return { message: `Moved ${a.ticketKey} to ${a.status.replace('_', ' ')}.` };
       case 'plan_backlog':
-        void plan(p).catch((e) => console.error(`Planning from chat failed: ${(e as Error).message}`));
+        void plan(p).catch((e) => log.error(`Planning from chat failed: ${(e as Error).message}`));
         return { message: 'The planner is working; the draft shows up on the Board when it is done.' };
     }
   };
 
+  /** Liveness: the process answers. */
   app.get('/api/health', async () => ({ ok: true }));
+  /** Readiness: the database answers and the engine isn't shutting down. */
+  app.get('/api/ready', async (_req, reply) => {
+    try {
+      d.store.db.prepare('SELECT 1').get();
+    } catch (e) {
+      return reply.status(503).send({ ready: false, reason: `Database: ${(e as Error).message}` });
+    }
+    if (d.orchestrator.isStopping) return reply.status(503).send({ ready: false, reason: 'Shutting down.' });
+    return { ready: true, schema: d.store.schemaVersion() };
+  });
 
   // Projects
   app.get('/api/projects', async () => d.store.listProjects());

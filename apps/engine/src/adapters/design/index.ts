@@ -4,6 +4,7 @@ import type { SecretStore } from '../../secrets.js';
 import type { Project, Ticket } from '../../types.js';
 import { ticketArea } from '../../workflow.js';
 import { FigmaClient, fileKeyFrom, figmaLinks, type FigmaLink } from './figma.js';
+import { httpFetch } from '../../http.js';
 
 /** Where design files go in the worktree. Never committed. */
 export const DESIGN_DIR = '.maestro/design';
@@ -26,7 +27,7 @@ export async function designContextFor(
   ticket: Ticket,
   worktree: string,
   secrets: SecretStore,
-  fetchImpl: typeof fetch = fetch,
+  fetchImpl: typeof fetch = httpFetch,
 ): Promise<string | null> {
   if (project.design.provider !== 'figma') return null;
   const ticketText = `${ticket.description}\n${ticket.acceptanceCriteria}`;

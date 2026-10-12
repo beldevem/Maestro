@@ -1,5 +1,6 @@
 import type { Ticket, TicketStatus } from '../../types.js';
 import { joinDescription, sizeFromLabels, splitDescription, type NewTicket, type PmAdapter } from './types.js';
+import { httpFetch } from '../../http.js';
 
 export interface JiraSettings {
   baseUrl: string;      // https://your-team.atlassian.net
@@ -59,7 +60,7 @@ export class JiraPm implements PmAdapter {
   constructor(
     private readonly s: JiraSettings,
     private readonly token: () => string | undefined,
-    private readonly fetchImpl: typeof fetch = fetch,
+    private readonly fetchImpl: typeof fetch = httpFetch,
   ) {}
 
   private async call<T>(path: string, init: RequestInit = {}): Promise<T> {

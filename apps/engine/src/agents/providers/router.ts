@@ -4,6 +4,7 @@ import type { AgentOutcome, AgentTask, CodingAgent } from '../coding-agent.js';
 import { CliAgent } from './cli.js';
 import { getProvider } from './config.js';
 import { OpenAICompatibleAgent } from './openai.js';
+import { modelFetch } from '../../http.js';
 
 /**
  * The one CodingAgent the engine uses: it sends each task to the provider named on it (Claude by default),
@@ -15,7 +16,7 @@ export class ProviderRouter implements CodingAgent {
     private readonly secrets: SecretStore,
     private readonly sessionsDir: string,
     private readonly claude: CodingAgent,
-    private readonly fetchImpl: typeof fetch = fetch,
+    private readonly fetchImpl: typeof fetch = modelFetch,
   ) {}
 
   async run(task: AgentTask): Promise<AgentOutcome> {

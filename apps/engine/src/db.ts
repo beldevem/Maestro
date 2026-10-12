@@ -82,6 +82,37 @@ const COLUMNS: { table: string; column: string; ddl: string }[] = [
 type Row = Record<string, any>;
 const now = () => new Date().toISOString();
 
+/**
+ * Schema changes, in order. Each runs once, in a transaction, and moves `PRAGMA user_version` to its
+ * position; each is also safe to run again, so databases from before versioning upgrade cleanly.
+ * Add new changes at the end; never edit or reorder released ones.
+ */
+export const MIGRATIONS: ((db: DatabaseSync) => void)[] = [
+  (db) => db.exec(SCHEMA),
+  (db) => {
+    for (const c of COLUMNS) {
+      const cols = db.prepare(`PRAGMA table_info(${c.table})`).all() as Row[];
+      if (!cols.some((r) => r.name === c.column)) db.exec(c.ddl);
+    }
+  },
+];
+
+function migrate(db: DatabaseSync): void {
+  const current = (db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version;
+  if (current > MIGRATIONS.length) throw new Error(`This database is from a newer Maestro (schema ${current}, this engine knows ${MIGRATIONS.length}). Update Maestro.`);
+  for (let v = current; v < MIGRATIONS.length; v++) {
+    db.exec('BEGIN IMMEDIATE');
+    try {
+      MIGRATIONS[v](db);
+      db.exec(`PRAGMA user_version = ${v + 1}`);
+      db.exec('COMMIT');
+    } catch (e) {
+      db.exec('ROLLBACK');
+      throw new Error(`Database migration ${v + 1} failed: ${(e as Error).message}`);
+    }
+  }
+}
+
 export class Store {
   readonly db: DatabaseSync;
 
@@ -91,11 +122,18 @@ export class Store {
     for (const f of [file, `${file}-wal`, `${file}-shm`]) if (existsSync(f)) chmodSync(f, 0o600);
     this.db = new DatabaseSync(file);
     this.db.exec('PRAGMA journal_mode = WAL;');
-    this.db.exec(SCHEMA);
-    for (const c of COLUMNS) {
-      const cols = this.db.prepare(`PRAGMA table_info(${c.table})`).all() as Row[];
-      if (!cols.some((r) => r.name === c.column)) this.db.exec(c.ddl);
-    }
+    // Another connection (a second engine, a backup tool) may hold the lock for a moment: wait instead of failing.
+    this.db.exec('PRAGMA busy_timeout = 5000;');
+    migrate(this.db);
+  }
+
+  close(): void {
+    if (this.db.isOpen) this.db.close();
+  }
+
+  /** The schema version this database is at (`PRAGMA user_version`). */
+  schemaVersion(): number {
+    return (this.db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version;
   }
 
   // Projects

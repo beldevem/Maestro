@@ -1,3 +1,4 @@
+import { httpFetch } from '../../http.js';
 const API = 'https://api.figma.com/v1';
 
 export interface FigmaLink {
@@ -57,7 +58,7 @@ export function summarizeNode(node: FigmaNode): FrameSummary {
 export class FigmaClient {
   constructor(
     private readonly token: string,
-    private readonly fetchImpl: typeof fetch = fetch,
+    private readonly fetchImpl: typeof fetch = httpFetch,
   ) {}
 
   private async get<T>(path: string): Promise<T> {

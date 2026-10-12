@@ -1,5 +1,6 @@
 import { spawnSync } from 'node:child_process';
 import { chmodSync, existsSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
+import { registerSecret } from './log.js';
 
 /** Where secret values are kept. */
 interface SecretBackend {
@@ -143,9 +144,13 @@ export class SecretStore {
 
   /** An empty environment variable (as docker compose passes an unset one) counts as unset. */
   get(name: string): string | undefined {
-    return process.env[name] || this.backend.get(name);
+    const v = process.env[name] || this.backend.get(name);
+    // Whatever the engine handles as a secret is masked if it ever reaches a log line.
+    registerSecret(v);
+    return v;
   }
   set(name: string, value: string): void {
+    registerSecret(value);
     this.backend.set(name, value);
   }
   delete(name: string): void {

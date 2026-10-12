@@ -1,9 +1,11 @@
+import { log } from '../../log.js';
 import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { AgentOutcome, AgentTask, CodingAgent } from '../coding-agent.js';
 import type { ProviderConfig } from './config.js';
 import { parseAllowed, runTool, toolDefinitions } from './tools.js';
+import { httpFetch, modelFetch } from '../../http.js';
 
 interface Message {
   role: 'system' | 'user' | 'assistant' | 'tool';
@@ -94,7 +96,7 @@ export class OpenAICompatibleAgent implements CodingAgent {
     private readonly cfg: ProviderConfig,
     private readonly apiKey: string | undefined,
     private readonly sessionsDir: string,
-    private readonly fetchImpl: typeof fetch = fetch,
+    private readonly fetchImpl: typeof fetch = modelFetch,
   ) {}
 
   private price(model: string): { input: number; output: number } {
@@ -199,7 +201,7 @@ export class OpenAICompatibleAgent implements CodingAgent {
             structured = again;
             text = retry;
           } else {
-            console.error(`${this.cfg.name} (${task.model}) did not return valid JSON after a retry; showing its text only.`);
+            log.warn(`${this.cfg.name} (${task.model}) did not return valid JSON after a retry; showing its text only.`);
             text = withoutJson(text) || withoutJson(retry) || 'The model did not give a usable answer.';
           }
         }
@@ -214,7 +216,7 @@ export class OpenAICompatibleAgent implements CodingAgent {
 }
 
 /** The models an OpenAI-compatible server offers (GET /models). */
-export async function listModels(cfg: ProviderConfig, apiKey: string | undefined, fetchImpl: typeof fetch = fetch): Promise<string[]> {
+export async function listModels(cfg: ProviderConfig, apiKey: string | undefined, fetchImpl: typeof fetch = httpFetch): Promise<string[]> {
   const res = await fetchImpl(`${cfg.baseUrl.replace(/\/+$/, '')}/models`, { headers: apiKey ? { Authorization: `Bearer ${apiKey}` } : {} });
   if (res.status === 401 || res.status === 403) throw new Error('The API key was refused.');
   if (!res.ok) throw new Error(`The server answered ${res.status}.`);

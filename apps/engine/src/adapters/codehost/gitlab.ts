@@ -2,6 +2,7 @@ import { join } from 'node:path';
 import type { ChecksState, Project } from '../../types.js';
 import { HttpGit, reviewText } from './http-git.js';
 import { MAESTRO_MARK, type CodeHostAdapter, type FeedbackItem, type PostedReview, type PullRequestInput, type PullRequestRef, type PullRequestStatus, type ReviewToPost } from './types.js';
+import { httpFetch } from '../../http.js';
 
 const PIPELINE: Record<string, ChecksState> = {
   success: 'success', failed: 'failure', canceled: 'failure',
@@ -16,7 +17,7 @@ export class GitLabCodeHost implements CodeHostAdapter {
   constructor(
     private readonly token: () => string | undefined,
     private readonly reposDir: string,
-    private readonly fetchImpl: typeof fetch = fetch,
+    private readonly fetchImpl: typeof fetch = httpFetch,
   ) {}
 
   private origin(project: Project): string {

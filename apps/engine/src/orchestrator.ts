@@ -1,3 +1,4 @@
+import { log } from './log.js';
 import { existsSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { codeHostFor, missingCredentials, type CodeHostAdapter } from './adapters/codehost/index.js';
@@ -168,6 +169,7 @@ export class Orchestrator {
    * Never throws; overlapping calls run once more after the current pass instead of in parallel.
    */
   tick(): Promise<Run[]> {
+    if (this.stopping) return Promise.resolve([]);
     if (this.ticking) {
       this.tickAgain = true;
       return this.ticking;
@@ -180,20 +182,20 @@ export class Orchestrator {
         try {
           projects = this.d.store.listProjects();
         } catch (e) {
-          console.error(`Auto-assign could not list projects: ${e instanceof Error ? e.message : String(e)}`);
+          log.error(`Auto-assign could not list projects: ${e instanceof Error ? e.message : String(e)}`);
         }
         for (const run of this.d.store.listRuns().filter((r) => r.status === 'in_review')) {
           try {
             await this.addressPending(run.id);
           } catch (e) {
-            console.error(`Could not hand feedback on ${run.ticketKey} to a worker: ${e instanceof Error ? e.message : String(e)}`);
+            log.error(`Could not hand feedback on ${run.ticketKey} to a worker: ${e instanceof Error ? e.message : String(e)}`);
           }
         }
         for (const project of projects) {
           try {
             started.push(...(await this.assignReady(project)));
           } catch (e) {
-            console.error(`Auto-assign for "${project.name}" failed: ${e instanceof Error ? e.message : String(e)}`);
+            log.error(`Auto-assign for "${project.name}" failed: ${e instanceof Error ? e.message : String(e)}`);
           }
         }
       } while (this.tickAgain);
@@ -236,7 +238,7 @@ export class Orchestrator {
         slots -= 1;
         if (area) busyAreas.add(area);
       } catch (e) {
-        console.error(`Auto-assign could not start ${ticket.key}: ${e instanceof Error ? e.message : String(e)}`);
+        log.error(`Auto-assign could not start ${ticket.key}: ${e instanceof Error ? e.message : String(e)}`);
         if (this.freeWorkers() === 0 || this.busy() >= this.maxConcurrent()) break;
       }
     }
@@ -245,6 +247,26 @@ export class Orchestrator {
 
   private freeWorkers(): number {
     return this.d.store.listAgents().filter((a) => a.role === 'worker' && a.state === 'available').length;
+  }
+
+  private stopping = false;
+
+  /**
+   * For a graceful exit: start nothing new, stop the agents of running runs, and wait for them
+   * (up to `graceMs`). Their runs are left as they were, so `recover()` on the next start
+   * decides, as for a crash, which go back to review and which failed.
+   */
+  async shutdown(graceMs = 10_000): Promise<number> {
+    this.stopping = true;
+    const running = [...this.active.values()];
+    for (const c of running) c.abort();
+    const deadline = Date.now() + graceMs;
+    while (this.active.size && Date.now() < deadline) await new Promise((r) => setTimeout(r, 100));
+    return running.length;
+  }
+
+  get isStopping(): boolean {
+    return this.stopping;
   }
 
   stop(runId: string): boolean {
@@ -264,7 +286,7 @@ export class Orchestrator {
     this.active.set(runId, controller);
     void fn(controller.signal).finally(() => {
       this.active.delete(runId);
-      void this.tick();
+      if (!this.stopping) void this.tick();
     });
   }
 
@@ -542,6 +564,8 @@ export class Orchestrator {
   }
 
   private fail(ctx: RunCtx, e: unknown): void {
+    // Shutting down: leave the run as it is for recover() on the next start.
+    if (this.stopping) return;
     const aborted = ctx.signal.aborted;
     const msg = aborted ? 'Stopped by you.' : e instanceof Error ? e.message : String(e);
     this.log(ctx.runId, 'error', msg);
@@ -780,7 +804,7 @@ export class Orchestrator {
             this.unblock(run, 'A change request on the pull request sends the run back to a worker.');
           }
         } catch (e) {
-          console.error(`Polling the pull request of ${run.ticketKey} failed: ${e instanceof Error ? e.message : String(e)}`);
+          log.error(`Polling the pull request of ${run.ticketKey} failed: ${e instanceof Error ? e.message : String(e)}`);
         }
       }
     } finally {
@@ -843,7 +867,7 @@ export class Orchestrator {
         await this.cleanup(run, project);
         removed += 1;
       } catch (e) {
-        console.error(`Could not remove the worktree of ${run.ticketKey}: ${e instanceof Error ? e.message : String(e)}`);
+        log.error(`Could not remove the worktree of ${run.ticketKey}: ${e instanceof Error ? e.message : String(e)}`);
       }
     }
     return removed;

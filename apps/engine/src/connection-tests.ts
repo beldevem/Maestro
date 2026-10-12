@@ -1,4 +1,5 @@
 import type { SecretStore } from './secrets.js';
+import { httpFetch } from './http.js';
 
 export type TestableProvider = 'anthropic' | 'github' | 'gitlab' | 'bitbucket' | 'trello' | 'figma';
 
@@ -6,7 +7,7 @@ export type TestableProvider = 'anthropic' | 'github' | 'gitlab' | 'bitbucket' |
  * Tries the saved token against the provider's "who am I" endpoint (free, no agent cost)
  * and says who it signs in as, or why it failed.
  */
-export async function testConnection(provider: TestableProvider, secrets: SecretStore, fetchImpl: typeof fetch = fetch): Promise<{ ok: boolean; message: string }> {
+export async function testConnection(provider: TestableProvider, secrets: SecretStore, fetchImpl: typeof fetch = httpFetch): Promise<{ ok: boolean; message: string }> {
   const need = (name: string) => {
     const v = secrets.get(name);
     if (!v) throw new Error(`No ${name} saved yet.`);

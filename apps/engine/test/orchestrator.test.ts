@@ -75,6 +75,26 @@ describe('worker run end to end on a local repo', () => {
     return { orchestrator, project, worker };
   }
 
+  it('on shutdown stops a running agent and leaves the run for recovery on the next start', async () => {
+    let started = false;
+    const agent: CodingAgent = {
+      run: (task) => {
+        started = true;
+        return new Promise((_, reject) => task.signal?.addEventListener('abort', () => reject(new Error('aborted'))));
+      },
+    };
+    const { orchestrator, project, worker } = setup(agent);
+    const ticket = store.createManualTicket(project.id, 'DEM', { title: 'Slow one', description: '', acceptanceCriteria: 'It is slow', labels: [] });
+    const run = await orchestrator.start(project.id, ticket.key);
+    await waitFor(() => started);
+    expect(await orchestrator.shutdown(5_000)).toBe(1);
+    expect(orchestrator.isActive(run.id)).toBe(false);
+    expect(store.getRun(run.id)!.status).toBe('running');
+    new Orchestrator({ store, secrets, agent, reposDir: join(home, 'repos'), worktreesDir: join(home, 'wt') }).recover();
+    expect(store.getRun(run.id)).toMatchObject({ status: 'failed', error: 'Engine restarted during the run.' });
+    expect(store.getAgent(worker.id)!.state).toBe('available');
+  });
+
   it('fixes a failing gate, commits on the ticket branch and moves the ticket to review', async () => {
     const agent = new FakeAgent();
     const { orchestrator, project, worker } = setup(agent);

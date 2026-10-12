@@ -1,3 +1,4 @@
+import { httpFetch } from '../../http.js';
 /** A Confluence page id from a page URL (…/pages/12345/Title or ?pageId=12345) or a bare id. */
 export function pageIdFrom(ref: string): string | null {
   const v = ref.trim();
@@ -47,7 +48,7 @@ export class ConfluenceClient {
     private readonly baseUrl: string,
     private readonly email: string,
     private readonly token: string,
-    private readonly fetchImpl: typeof fetch = fetch,
+    private readonly fetchImpl: typeof fetch = httpFetch,
   ) {}
 
   async page(id: string): Promise<ConfluencePage> {

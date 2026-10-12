@@ -1,6 +1,7 @@
 import type { SecretStore } from '../../secrets.js';
 import type { Project } from '../../types.js';
 import { ConfluenceClient, confluenceLinks, pageIdFrom } from './confluence.js';
+import { httpFetch } from '../../http.js';
 
 const MAX_PAGE_CHARS = 15_000;
 const MAX_TOTAL_CHARS = 40_000;
@@ -17,7 +18,7 @@ export function docPageIds(project: Project, extraText = ''): string[] {
  * Uses the Jira site and email when the project's PM tool is Jira, else the docs settings, with the Atlassian token.
  * Returns null when there are no pages; pages that fail are named in the text instead of failing the run.
  */
-export async function docsContextFor(project: Project, secrets: SecretStore, extraText = '', fetchImpl: typeof fetch = fetch): Promise<string | null> {
+export async function docsContextFor(project: Project, secrets: SecretStore, extraText = '', fetchImpl: typeof fetch = httpFetch): Promise<string | null> {
   const ids = docPageIds(project, extraText);
   if (!ids.length) return null;
   const s = project.docs.settings;

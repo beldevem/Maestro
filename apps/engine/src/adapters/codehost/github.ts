@@ -4,6 +4,7 @@ import { git } from '../../proc.js';
 import type { Project } from '../../types.js';
 import type { ChecksState, ReviewVerdict } from '../../types.js';
 import { MAESTRO_MARK, type CodeHostAdapter, type FeedbackItem, type PostedReview, type PullRequestInput, type PullRequestRef, type PullRequestStatus, type ReviewToPost } from './types.js';
+import { httpFetch } from '../../http.js';
 
 const API = 'https://api.github.com';
 
@@ -13,7 +14,7 @@ export class GitHubCodeHost implements CodeHostAdapter {
   constructor(
     private readonly token: () => string | undefined,
     private readonly reposDir: string,
-    private readonly fetchImpl: typeof fetch = fetch,
+    private readonly fetchImpl: typeof fetch = httpFetch,
   ) {}
 
   /** The token goes in a per-command header, never in the remote URL or on disk. */
