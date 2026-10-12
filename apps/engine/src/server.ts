@@ -21,6 +21,11 @@ import { DESIGN_DIR } from './adapters/design/index.js';
 import { readBaseMemory } from './memory.js';
 import { testConnection } from './connection-tests.js';
 import { invalidSetting } from './settings.js';
+import { CLI_PRESETS, cliInstalled } from './agents/providers/cli.js';
+import { chooseModel, getProvider, listProviders, projectRoles, providerSchema, ROLES, saveProviders, type ProviderConfig } from './agents/providers/config.js';
+import { listModels } from './agents/providers/openai.js';
+import { CLAUDE_MODELS, claudeLoginStatus, OPENAI_PRESETS } from './agents/providers/presets.js';
+import { run as runProc } from './proc.js';
 import { TEMPLATES, templateById, workflowFor } from './templates.js';
 import { computeMetrics } from './metrics.js';
 import { KNOWN_SECRETS, type SecretStore } from './secrets.js';
@@ -68,6 +73,7 @@ const ticketSchema = z.object({
   labels: z.array(z.string()).default([]),
 });
 const agentSchema = z.object({
+  provider: z.string().default(''),
   name: z.string().trim().min(1),
   role: z.enum(['worker', 'orchestrator', 'reviewer', 'planner', 'assistant']).default('worker'),
   model: z.string().default(''),
@@ -602,6 +608,100 @@ export async function buildServer(d: ServerDeps): Promise<FastifyInstance> {
     return { dailyCap: dailyCap(d.store, p.id) };
   });
 
+  // AI providers: Claude, any OpenAI-compatible API, or a coding CLI; and which one each role uses
+  const providerView = (p: ProviderConfig) => ({
+    ...p,
+    keySet: p.apiKeySecret ? !!d.secrets.get(p.apiKeySecret) : false,
+    installed: p.kind === 'cli' ? cliInstalled(p.cli?.command ?? '') : undefined,
+    claudeLogin: p.kind === 'claude' ? claudeLoginStatus() : undefined,
+    warnings: [
+      ...(p.kind === 'openai' && p.structuredOutput === 'prompt' ? ['Without a JSON mode, the planner, reviewer and chat rely on the model following instructions; pick models that do.'] : []),
+      ...(p.kind === 'cli' ? ['CLI agents apply their own permissions and report no cost. Chat and planning through a CLI are slow and less reliable; prefer an API provider for those roles.'] : []),
+    ],
+  });
+  const rolesView = () => Object.fromEntries(ROLES.map((r) => [r, chooseModel(d.store, r)]));
+  app.get('/api/providers', async () => ({
+    providers: listProviders(d.store).map(providerView),
+    roles: rolesView(),
+    presets: { openai: OPENAI_PRESETS, cli: CLI_PRESETS.map((c) => ({ ...c, installed: cliInstalled(c.command) })), claudeModels: CLAUDE_MODELS },
+    inDocker: existsSync('/.dockerenv'),
+  }));
+  app.put<{ Params: { id: string } }>('/api/providers/:id', async (req) => {
+    const body = providerSchema.parse({ ...(req.body as object), id: req.params.id });
+    if (body.kind === 'openai' && !/^https?:\/\//.test(body.baseUrl)) throw new Error('The base URL must start with http:// or https://.');
+    if (body.kind === 'cli' && !body.cli?.command) throw new Error('Set the command to run.');
+    const all = listProviders(d.store);
+    saveProviders(d.store, all.some((p) => p.id === body.id) ? all.map((p) => (p.id === body.id ? body : p)) : [...all, body]);
+    return providerView(body);
+  });
+  app.delete<{ Params: { id: string } }>('/api/providers/:id', async (req) => {
+    const id = req.params.id;
+    const roles = ROLES.filter((r) => (d.store.getSetting(`provider.${r}`) || 'claude') === id);
+    const workers = d.store.listAgents().filter((a) => a.provider === id).map((a) => a.name);
+    const projects = d.store.listProjects().filter((p) => Object.values(projectRoles(d.store, p.id)).some((c) => c?.provider === id)).map((p) => `project ${p.name}`);
+    if (roles.length || workers.length || projects.length) {
+      throw Object.assign(new Error(`It is still used by ${[...roles.map((r) => `the ${r === 'assistant' ? 'chat' : r} role`), ...workers, ...projects].join(', ')}; choose another provider there first.`), { statusCode: 409 });
+    }
+    saveProviders(d.store, listProviders(d.store).filter((p) => p.id !== id));
+    return { ok: true };
+  });
+  app.post<{ Params: { id: string } }>('/api/providers/:id/test', async (req) => {
+    const p = getProvider(d.store, req.params.id);
+    if (!p) throw Object.assign(new Error('Provider not found.'), { statusCode: 404 });
+    const key = p.apiKeySecret ? d.secrets.get(p.apiKeySecret) : undefined;
+    if (p.kind === 'claude') return key ? testConnection('anthropic', d.secrets) : { ok: claudeLoginStatus().valid, message: claudeLoginStatus().message };
+    if (p.kind === 'cli') {
+      const cmd = p.cli?.command ?? '';
+      if (!cliInstalled(cmd)) return { ok: false, message: `${cmd || 'The command'} is not installed where Maestro runs${existsSync('/.dockerenv') ? ' (inside the container)' : ''}.` };
+      const v = await runProc(cmd, ['--version'], { cwd: tmpdir(), timeoutMs: 20_000 });
+      return { ok: v.code === 0, message: v.code === 0 ? `${cmd} ${v.output.trim().split('\n')[0]}` : `${cmd} --version failed.` };
+    }
+    try {
+      const models = await listModels(p, key);
+      return { ok: true, message: `Connected: ${models.length} model${models.length === 1 ? '' : 's'} available.`, models };
+    } catch (e) {
+      const msg = (e as Error).message;
+      const hint = /fetch failed|ECONNREFUSED/i.test(msg) ? ' Is the server running and reachable from Maestro?' : '';
+      return { ok: false, message: `${msg}${hint}` };
+    }
+  });
+  app.get<{ Params: { id: string } }>('/api/providers/:id/models', async (req) => {
+    const p = getProvider(d.store, req.params.id);
+    if (!p) throw Object.assign(new Error('Provider not found.'), { statusCode: 404 });
+    if (p.kind === 'claude') return CLAUDE_MODELS;
+    if (p.kind === 'cli') return [];
+    return listModels(p, p.apiKeySecret ? d.secrets.get(p.apiKeySecret) : undefined);
+  });
+  const choiceSchema = z.object({ provider: z.string().min(1), model: z.string().default('') });
+  const checkChoice = (c: { provider: string }) => {
+    if (!getProvider(d.store, c.provider)) throw new Error(`No AI provider called "${c.provider}".`);
+  };
+  app.put('/api/roles', async (req) => {
+    const body = z.object(Object.fromEntries(ROLES.map((r) => [r, choiceSchema.optional()]))).parse(req.body);
+    for (const [role, c] of Object.entries(body)) {
+      if (!c) continue;
+      checkChoice(c);
+      d.store.setSetting(`provider.${role}`, c.provider);
+      d.store.setSetting(`model.${role}`, c.model.trim());
+    }
+    return rolesView();
+  });
+  app.get<{ Params: { id: string } }>('/api/projects/:id/roles', async (req) => projectRoles(d.store, project(req.params.id).id));
+  app.put<{ Params: { id: string } }>('/api/projects/:id/roles', async (req) => {
+    const p = project(req.params.id);
+    const body = z.object(Object.fromEntries(ROLES.map((r) => [r, choiceSchema.nullable().optional()]))).parse(req.body);
+    const current = projectRoles(d.store, p.id);
+    for (const [role, c] of Object.entries(body)) {
+      if (c === null) delete current[role as keyof typeof current];
+      else if (c) {
+        checkChoice(c);
+        current[role as keyof typeof current] = { provider: c.provider, model: c.model.trim() };
+      }
+    }
+    d.store.setSetting(`roles.${p.id}`, JSON.stringify(current));
+    return current;
+  });
+
   // Settings
   app.get('/api/settings', async () => {
     const set = new Set(d.secrets.names());
@@ -616,7 +716,7 @@ export async function buildServer(d: ServerDeps): Promise<FastifyInstance> {
         'budget.projectDailyUsd': '0',
         'worktrees.keepDays': '3',
         // Per-project values (auto-assign toggle, pending memory) have their own endpoints.
-        ...Object.fromEntries(Object.entries(d.store.allSettings()).filter(([k]) => !/^(autoAssign|memory|budget\.daily)\./.test(k))),
+        ...Object.fromEntries(Object.entries(d.store.allSettings()).filter(([k]) => !/^(autoAssign|memory|budget\.daily|roles)\./.test(k) && k !== 'providers')),
       },
       secrets: KNOWN_SECRETS.map((s) => ({ ...s, set: set.has(s.name) || !!process.env[s.name] })),
       secretsBackend: d.secrets.kind,

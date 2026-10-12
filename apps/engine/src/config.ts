@@ -11,10 +11,12 @@ export const paths = {
   secrets: join(MAESTRO_HOME, 'secrets.json'),
   repos: join(MAESTRO_HOME, 'repos'),
   worktrees: join(MAESTRO_HOME, 'worktrees'),
+  /** Conversations of agents run by Maestro's own loop (OpenAI-compatible providers), for resuming. */
+  sessions: join(MAESTRO_HOME, 'sessions'),
 };
 
 /** Creates Maestro's folders readable only by you (700), and tightens ones made before. */
-export function ensureHome(dirs = [MAESTRO_HOME, paths.repos, paths.worktrees]): void {
+export function ensureHome(dirs = [MAESTRO_HOME, paths.repos, paths.worktrees, paths.sessions]): void {
   for (const dir of dirs) {
     mkdirSync(dir, { recursive: true, mode: 0o700 });
     chmodSync(dir, 0o700);

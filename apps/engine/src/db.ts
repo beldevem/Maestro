@@ -68,6 +68,7 @@ CREATE TABLE IF NOT EXISTS ticket_deps (
 /** Columns added after the first release, for databases created before them. */
 const COLUMNS: { table: string; column: string; ddl: string }[] = [
   { table: 'projects', column: 'docs', ddl: `ALTER TABLE projects ADD COLUMN docs TEXT NOT NULL DEFAULT '{"provider":"none","settings":{}}'` },
+  { table: 'agents', column: 'provider', ddl: "ALTER TABLE agents ADD COLUMN provider TEXT NOT NULL DEFAULT ''" },
   { table: 'runs', column: 'area', ddl: 'ALTER TABLE runs ADD COLUMN area TEXT' },
   { table: 'runs', column: 'session_id', ddl: 'ALTER TABLE runs ADD COLUMN session_id TEXT' },
   { table: 'runs', column: 'base_ref', ddl: 'ALTER TABLE runs ADD COLUMN base_ref TEXT' },
@@ -154,18 +155,18 @@ export class Store {
     const row = this.db.prepare('SELECT * FROM agents WHERE id = ?').get(id) as Row | undefined;
     return row ? toAgent(row) : undefined;
   }
-  createAgent(input: Pick<Agent, 'name' | 'role' | 'model'>): Agent {
-    const a: Agent = { ...input, id: randomUUID(), state: 'available', currentRunId: null, note: '' };
-    this.db.prepare('INSERT INTO agents (id, name, role, model, state, current_run_id, note) VALUES (?, ?, ?, ?, ?, ?, ?)')
-      .run(a.id, a.name, a.role, a.model, a.state, null, '');
+  createAgent(input: Pick<Agent, 'name' | 'role' | 'model'> & { provider?: string }): Agent {
+    const a: Agent = { provider: '', ...input, id: randomUUID(), state: 'available', currentRunId: null, note: '' };
+    this.db.prepare('INSERT INTO agents (id, name, role, provider, model, state, current_run_id, note) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+      .run(a.id, a.name, a.role, a.provider, a.model, a.state, null, '');
     return a;
   }
   updateAgent(id: string, patch: Partial<Omit<Agent, 'id'>>): Agent | undefined {
     const current = this.getAgent(id);
     if (!current) return undefined;
     const a = { ...current, ...patch };
-    this.db.prepare('UPDATE agents SET name = ?, role = ?, model = ?, state = ?, current_run_id = ?, note = ? WHERE id = ?')
-      .run(a.name, a.role, a.model, a.state, a.currentRunId, a.note, id);
+    this.db.prepare('UPDATE agents SET name = ?, role = ?, provider = ?, model = ?, state = ?, current_run_id = ?, note = ? WHERE id = ?')
+      .run(a.name, a.role, a.provider, a.model, a.state, a.currentRunId, a.note, id);
     return a;
   }
   deleteAgent(id: string): void {
@@ -418,7 +419,7 @@ function toProject(r: Row): Project {
   };
 }
 function toAgent(r: Row): Agent {
-  return { id: r.id, name: r.name, role: r.role, model: r.model, state: r.state, currentRunId: r.current_run_id ?? null, note: r.note };
+  return { id: r.id, name: r.name, role: r.role, provider: r.provider ?? '', model: r.model, state: r.state, currentRunId: r.current_run_id ?? null, note: r.note };
 }
 function toRun(r: Row): Run {
   return {

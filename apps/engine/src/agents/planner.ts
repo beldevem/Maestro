@@ -5,6 +5,7 @@ import type { SecretStore } from '../secrets.js';
 import type { BacklogDraft, BacklogItem, Project, Ticket } from '../types.js';
 import type { CodingAgent } from './coding-agent.js';
 import { plannerSystemPrompt, type ExtraKnowledge } from './prompts.js';
+import { chooseModel } from './providers/config.js';
 
 const SIZES = ['XS', 'S', 'M', 'L', 'XL'] as const;
 
@@ -79,7 +80,7 @@ export async function draftBacklog(
     cwd,
     prompt: 'Draft the backlog for this project now.',
     systemPrompt: plannerSystemPrompt(project, existingTickets, extra),
-    model: deps.store.getSetting('model.planner') || 'claude-opus-5-5',
+    ...chooseModel(deps.store, 'planner', { projectId: project.id }),
     allowedTools: ['Read', 'Glob', 'Grep'],
     maxTurns: 40,
     outputSchema: BACKLOG_JSON_SCHEMA,

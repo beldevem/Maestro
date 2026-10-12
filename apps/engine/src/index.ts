@@ -1,6 +1,8 @@
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ClaudeCodingAgent } from './agents/coding-agent.js';
+import { migrateProviders } from './agents/providers/config.js';
+import { ProviderRouter } from './agents/providers/router.js';
 import { ensureHome, HOST, paths, PORT } from './config.js';
 import { Store } from './db.js';
 import { Orchestrator } from './orchestrator.js';
@@ -12,7 +14,9 @@ const store = new Store(paths.db);
 const secrets = SecretStore.open(paths.secrets);
 console.log(`Secrets are kept in ${secrets.kind === 'keychain' ? 'the system keychain' : paths.secrets}.`);
 if (secrets.migrated.length) console.log(`Moved ${secrets.migrated.join(', ')} from ${paths.secrets} into the keychain.`);
-const agent = new ClaudeCodingAgent();
+// Installs from before AI providers existed keep working: Claude for every role.
+migrateProviders(store);
+const agent = new ProviderRouter(store, secrets, paths.sessions, new ClaudeCodingAgent());
 const orchestrator = new Orchestrator({ store, secrets, agent, reposDir: paths.repos, worktreesDir: paths.worktrees });
 orchestrator.recover();
 

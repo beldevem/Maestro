@@ -8,6 +8,8 @@ export interface AgentMessage {
 }
 
 export interface AgentTask {
+  /** Which configured AI provider runs the task (Settings → AI providers); Claude when unset. */
+  provider?: string;
   cwd: string;
   prompt: string;
   systemPrompt: string;

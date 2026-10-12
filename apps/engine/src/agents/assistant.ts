@@ -6,6 +6,7 @@ import type { SecretStore } from '../secrets.js';
 import type { Project, Ticket } from '../types.js';
 import type { CodingAgent } from './coding-agent.js';
 import { projectKnowledge } from './prompts.js';
+import { chooseModel } from './providers/config.js';
 
 export interface ChatTurn {
   role: 'user' | 'assistant';
@@ -129,7 +130,7 @@ Return your reply in the requested structured format.`;
     cwd: cwd && existsSync(cwd) ? cwd : tmpdir(),
     prompt: transcript ? `${transcript}\n\nUser: ${message}` : message,
     systemPrompt: system,
-    model: deps.store.getSetting('model.assistant') || 'claude-sonnet-5-5',
+    ...chooseModel(deps.store, 'assistant', { projectId: project.id }),
     allowedTools: ['Read', 'Glob', 'Grep'],
     maxTurns: 15,
     outputSchema: CHAT_JSON_SCHEMA,
@@ -200,7 +201,7 @@ Return your reply in the requested structured format.`;
     cwd: cwd && existsSync(cwd) ? cwd : tmpdir(),
     prompt: transcript ? `${transcript}\n\nUser: ${message}` : message,
     systemPrompt: system,
-    model: deps.store.getSetting('model.assistant') || 'claude-sonnet-5-5',
+    ...chooseModel(deps.store, 'assistant', { projectId: scope?.id }),
     allowedTools: scope ? ['Read', 'Glob', 'Grep'] : [],
     maxTurns: 15,
     outputSchema: CHAT_JSON_SCHEMA,

@@ -74,6 +74,8 @@ export interface Agent {
   id: string;
   name: string;
   role: AgentRole;
+  /** This worker's own AI provider; empty uses the project's or the default for workers. */
+  provider: string;
   model: string;
   state: AgentState;
   currentRunId: string | null;

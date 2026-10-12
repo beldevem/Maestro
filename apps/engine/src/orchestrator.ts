@@ -15,6 +15,7 @@ import { git } from './proc.js';
 import type { SecretStore } from './secrets.js';
 import { budgetState, perRunCap, startOfToday, usd } from './budget.js';
 import { numberSetting } from './settings.js';
+import { chooseModel } from './agents/providers/config.js';
 import type { Agent, AgentState, AlertKind, Project, Review, ReviewComment, Run, RunEventKind, SpendKind, Ticket } from './types.js';
 import { blockedBy, branchName, checkReady, commitMessage, parseWorkflow, ticketArea, type Workflow } from './workflow.js';
 
@@ -80,8 +81,9 @@ export class Orchestrator {
     return numberSetting(this.d.store, 'maxConcurrentRuns');
   }
 
-  workerModel(agent: Agent): string {
-    return agent.model || this.d.store.getSetting('model.worker') || 'claude-sonnet-5-5';
+  /** The provider and model a worker uses on a project: its own, then the project's, then the default. */
+  workerChoice(agent: Agent, projectId: string) {
+    return chooseModel(this.d.store, 'worker', { projectId, agent: { provider: agent.provider, model: agent.model } });
   }
 
   /** Assign a ticket to a worker and start the run in the background. Returns once the run exists. */
@@ -282,12 +284,14 @@ export class Orchestrator {
       const done = await this.implement(ctx, ticketPrompt(ticket, design), false);
       if (!done) return;
 
-      if (!(await this.hasChanges(ctx))) {
+      // Some coding CLIs commit their own work; commits since the run started count as changes too.
+      const committedByAgent = await this.commitsSinceStart(ctx);
+      if (!(await this.hasChanges(ctx)) && !committedByAgent) {
         this.block(ctx, 'The agent finished without changing any files.', `Blocked on ${ticket.key}: no changes`);
         return;
       }
       done.summary = this.recordLearnings(ctx, done.summary);
-      await this.commit(ctx, commitMessage(wf, ticket));
+      if (await git(ctx.worktree, ['status', '--porcelain', ...CHANGE_PATHS])) await this.commit(ctx, commitMessage(wf, ticket));
       if (memoryEdited) store.deleteSetting(`memory.${project.id}`);
       await this.publish(ctx, done.summary, done.gates);
       await this.reviewLoop(ctx);
@@ -338,11 +342,13 @@ export class Orchestrator {
       }
       const what = addressing ? 'Addressing review on' : tries === 0 ? 'On' : 'Fixing';
       this.setAgent(agent.id, addressing ? 'addressing_review' : 'working', ctx.runId, `${what} ${ticket.key}${tries ? `, try ${tries}` : ''}`);
+      const choice = this.workerChoice(agent, project.id);
       const outcome = await this.d.agent.run({
+        provider: choice.provider,
         cwd: ctx.worktree,
         prompt,
         systemPrompt: workerSystemPrompt(project, wf, { docs: ctx.docs, memory: ctx.memory }),
-        model: this.workerModel(agent),
+        model: choice.model,
         allowedTools: tools,
         resume: this.run(ctx).sessionId ?? undefined,
         env: ctx.env,
@@ -383,6 +389,12 @@ export class Orchestrator {
       }
       prompt = fixPrompt(failed, tries, wf.max_fix_attempts);
     }
+  }
+
+  private async commitsSinceStart(ctx: RunCtx): Promise<number> {
+    const base = this.run(ctx).baseRef;
+    if (!base) return 0;
+    return Number(await git(ctx.worktree, ['rev-list', '--count', `${base}..HEAD`]).catch(() => '0')) || 0;
   }
 
   private async hasChanges(ctx: RunCtx): Promise<boolean> {
@@ -442,7 +454,8 @@ export class Orchestrator {
         result = await runReviewer(
           this.d.agent,
           {
-            cwd: ctx.worktree, model: store.getSetting('model.reviewer') || 'claude-opus-5-5', env: ctx.env, signal, maxBudgetUsd: this.budgetLeft(ctx),
+            ...chooseModel(store, 'reviewer', { projectId: project.id }),
+            cwd: ctx.worktree, env: ctx.env, signal, maxBudgetUsd: this.budgetLeft(ctx),
             onMessage: (m) => m.kind === 'agent' && this.log(ctx.runId, 'agent', `Reviewer: ${m.text}`),
           },
           project, wf, ticket, this.run(ctx).baseRef ?? wf.base_branch, readMemoryFile(ctx.worktree), store.listReviews(ctx.runId),
