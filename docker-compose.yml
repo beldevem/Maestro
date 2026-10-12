@@ -2,7 +2,11 @@
 # Don't also run the engine on the host with the same data folder: they would share one database.
 services:
   maestro:
-    build: .
+    build:
+      context: .
+      args:
+        # Coding CLIs to install in the image as AI providers, e.g. "@github/copilot @openai/codex".
+        EXTRA_NPM_CLIS: ${EXTRA_NPM_CLIS:-}
     image: maestro:local
     restart: unless-stopped
     # Your uid/gid, so files in mounted repositories and the data folder stay yours.

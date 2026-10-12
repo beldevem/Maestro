@@ -17,10 +17,13 @@ RUN npm ci --omit=dev --no-audit --no-fund
 FROM node:24-bookworm-slim
 # git for clones, worktrees and commits; the docker CLI only when the gate sandbox is wanted.
 ARG WITH_DOCKER_CLI=false
+# Coding CLIs to use as AI providers, as npm packages, e.g. "@github/copilot @openai/codex @google/gemini-cli".
+ARG EXTRA_NPM_CLIS=
 RUN apt-get update \
   && apt-get install -y --no-install-recommends git ca-certificates tini \
   && if [ "$WITH_DOCKER_CLI" = "true" ]; then apt-get install -y --no-install-recommends docker.io; fi \
   && rm -rf /var/lib/apt/lists/*
+RUN if [ -n "$EXTRA_NPM_CLIS" ]; then npm install -g --no-audit --no-fund $EXTRA_NPM_CLIS && npm cache clean --force; fi
 WORKDIR /app
 COPY --from=engine /app/apps/engine/node_modules apps/engine/node_modules
 COPY apps/engine/package.json apps/engine/tsconfig.json apps/engine/
