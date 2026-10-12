@@ -1,0 +1,15 @@
+# Opt-in: lets workflows with `sandbox.type: docker` run quality gates in containers.
+#   docker compose -f docker-compose.yml -f docker-compose.sandbox.yml up -d --build
+# WARNING: access to the Docker socket is root-equivalent on this machine. Anything running in
+# Maestro's container (including code your agents write and your gates run) could take over the host.
+# Set DOCKER_GID to the host's docker group id: getent group docker | cut -d: -f3
+services:
+  maestro:
+    build:
+      context: .
+      args:
+        WITH_DOCKER_CLI: "true"
+    group_add:
+      - "${DOCKER_GID:?set DOCKER_GID}"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock

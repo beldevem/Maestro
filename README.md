@@ -72,6 +72,30 @@ npm run dev:dashboard
 
 Maestro keeps its database, clones and worktrees in `~/.maestro`. To use another folder, set `MAESTRO_HOME`. `MAESTRO_PORT` changes the port, `MAESTRO_ALLOWED_HOSTS` adds host names the engine answers to, and `MAESTRO_SECRETS=file|keychain` picks where secrets live.
 
+## Run it in Docker
+
+```bash
+cp .env.example .env      # then fill it in: your uid/gid, data folder, projects folder, API key, git name
+mkdir -p ~/.maestro       # the data folder must exist (MAESTRO_DATA)
+docker compose up -d --build
+```
+
+Open http://127.0.0.1:4800. The port is published on 127.0.0.1 only; inside the container the engine listens on all interfaces, and its Host and Origin checks still refuse anything but localhost.
+
+```bash
+docker compose logs -f    # follow the engine log
+docker compose ps         # status, including the health check
+docker compose down       # stop (data stays)
+```
+
+- **Data**: the folder in `MAESTRO_DATA` (by default you'd use `~/.maestro`), mounted at the same path as on the host. It holds the database, clones, worktrees and `secrets.json`; folders are 700 and files 600. Don't run the engine on the host at the same time with the same folder.
+- **Local-folder projects**: `PROJECTS_DIR` is mounted at the same path as on the host, so projects under it work as they do outside Docker. Folders elsewhere aren't visible to the container.
+- **Claude**: set `ANTHROPIC_API_KEY` in `.env`, or use your Claude Code login by mounting `~/.claude/.credentials.json` read-only (the commented line in `docker-compose.yml`; a git-ignored `docker-compose.override.yml` is a good place for it). The login is copied into the private config folder at start.
+- **Secrets**: there is no system keychain in a container, so keys saved in Settings go to `$MAESTRO_DATA/secrets.json` (mode 600). Keys saved in a keychain by an engine on the host aren't visible to the container. Tokens can also come from `.env`.
+- **Files you own**: the container runs as `MAESTRO_UID:MAESTRO_GID`, so commits, worktrees and files in your repositories are yours. `GIT_AUTHOR_NAME` and `GIT_AUTHOR_EMAIL` set who Maestro's commits are from.
+- **Quality gates** run inside the container, which has Node 24 and git. Projects that need other tools (Python, Java...) need an image built on top of this one.
+- **Docker gate sandbox** (opt-in): `docker compose -f docker-compose.yml -f docker-compose.sandbox.yml up -d --build` with `DOCKER_GID` set. This mounts the Docker socket, which is root-equivalent access to this machine; only use it if you accept that.
+
 ## First steps
 
 1. Open **Settings** and add your Anthropic API key (skip this if you use Claude Code's login), plus the tokens for your code host and PM tool. Set budgets, and turn on desktop notifications if you want them.

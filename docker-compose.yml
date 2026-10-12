@@ -1,0 +1,35 @@
+# Maestro in Docker. Copy .env.example to .env, fill it in, then: docker compose up -d --build
+# Don't also run the engine on the host with the same data folder: they would share one database.
+services:
+  maestro:
+    build: .
+    image: maestro:local
+    restart: unless-stopped
+    # Your uid/gid, so files in mounted repositories and the data folder stay yours.
+    user: "${MAESTRO_UID:-1000}:${MAESTRO_GID:-1000}"
+    ports:
+      # Only this machine can reach it.
+      - "127.0.0.1:${MAESTRO_PORT:-4800}:4800"
+    environment:
+      MAESTRO_HOME: ${MAESTRO_DATA:?set MAESTRO_DATA in .env}
+      HOME: ${MAESTRO_DATA}/home
+      CLAUDE_CONFIG_DIR: ${MAESTRO_DATA}/claude
+      # No system keychain in a container: secrets go to $MAESTRO_DATA/secrets.json (mode 600).
+      MAESTRO_SECRETS: file
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      GITHUB_TOKEN: ${GITHUB_TOKEN:-}
+      GITLAB_TOKEN: ${GITLAB_TOKEN:-}
+      JIRA_API_TOKEN: ${JIRA_API_TOKEN:-}
+      FIGMA_TOKEN: ${FIGMA_TOKEN:-}
+      GIT_AUTHOR_NAME: ${GIT_AUTHOR_NAME:-Maestro}
+      GIT_AUTHOR_EMAIL: ${GIT_AUTHOR_EMAIL:-maestro@localhost}
+      GIT_COMMITTER_NAME: ${GIT_AUTHOR_NAME:-Maestro}
+      GIT_COMMITTER_EMAIL: ${GIT_AUTHOR_EMAIL:-maestro@localhost}
+    volumes:
+      # Data at the same path as on the host (database 600, folders 700).
+      - ${MAESTRO_DATA}:${MAESTRO_DATA}
+      # Local-folder projects: your repositories at the same path as on the host.
+      - ${PROJECTS_DIR:?set PROJECTS_DIR in .env}:${PROJECTS_DIR}
+      # Optional: use your Claude Code login instead of an API key. Mounted read-only and copied into the
+      # private config folder at start (a refreshed token stays in the container's copy, not in yours).
+      # - ${HOME}/.claude/.credentials.json:/run/claude-login/.credentials.json:ro

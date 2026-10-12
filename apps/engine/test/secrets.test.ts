@@ -78,6 +78,8 @@ describe('secrets', () => {
     process.env.MAESTRO_TEST_SECRET = 'from-env';
     try {
       expect(s.get('MAESTRO_TEST_SECRET')).toBe('from-env');
+      process.env.MAESTRO_TEST_SECRET = '';
+      expect(s.get('MAESTRO_TEST_SECRET')).toBe('stored');
     } finally {
       delete process.env.MAESTRO_TEST_SECRET;
     }

@@ -141,8 +141,9 @@ export class SecretStore {
     return moved;
   }
 
+  /** An empty environment variable (as docker compose passes an unset one) counts as unset. */
   get(name: string): string | undefined {
-    return process.env[name] ?? this.backend.get(name);
+    return process.env[name] || this.backend.get(name);
   }
   set(name: string, value: string): void {
     this.backend.set(name, value);

@@ -1,0 +1,16 @@
+# Dependencies and build output are made inside the image.
+**/node_modules
+**/dist
+**/.angular
+**/coverage
+# Git history, local env and editor files.
+.git
+.env
+.env.*
+!.env.example
+**/*.log
+.vscode
+.idea
+# Maestro data never goes into the image.
+.maestro
+data
