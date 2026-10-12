@@ -6,6 +6,7 @@ import { Live } from '../live';
 import { STATE_LABEL, type Agent, type AgentState, type ProviderView } from '../models';
 import { Confirm } from '../ui/confirm';
 import { Icon } from '../ui/icon';
+import { ModelSelect } from '../ui/model-select';
 import { Toasts } from '../ui/toast';
 
 const BUSY: AgentState[] = ['working', 'running_checks', 'addressing_review', 'waiting_review'];
@@ -13,7 +14,7 @@ const BUSY: AgentState[] = ['working', 'running_checks', 'addressing_review', 'w
 /** The workers that implement tickets: add, rename, change model, pause, delete. */
 @Component({
   selector: 'app-agents',
-  imports: [FormsModule, RouterLink, Icon],
+  imports: [FormsModule, RouterLink, Icon, ModelSelect],
   template: `
     <header class="page-head">
       <div>
@@ -35,12 +36,14 @@ const BUSY: AgentState[] = ['working', 'running_checks', 'addressing_review', 'w
         <div class="row">
           <label>Name <input [(ngModel)]="draft.name" name="name" required maxlength="40" placeholder="Worker 3" /></label>
           <label>AI provider
-            <select [(ngModel)]="draft.provider" name="provider" (ngModelChange)="loadModels($event)">
+            <select [(ngModel)]="draft.provider" name="provider">
               <option value="">Default for workers ({{ defaultName() }})</option>
               @for (p of providers(); track p.id) { <option [value]="p.id">{{ p.name }}</option> }
             </select>
           </label>
-          <label>Model <input [(ngModel)]="draft.model" name="model" [attr.list]="'wm-' + (draft.provider || defaultId())" placeholder="Default" spellcheck="false" /></label>
+          <div class="field"><span class="field-label">Model</span>
+            <app-model-select [provider]="draft.provider || defaultId()" [(value)]="draft.model" selectId="new-model" label="Model" defaultLabel="Default model" />
+          </div>
         </div>
         <div class="row">
           <button class="primary" type="submit" [disabled]="!draft.name.trim() || busy()">Add worker</button>
@@ -48,9 +51,7 @@ const BUSY: AgentState[] = ['working', 'running_checks', 'addressing_review', 'w
         </div>
       </form>
     }
-    @for (p of providers(); track p.id) {
-      <datalist [id]="'wm-' + p.id">@for (m of models()[p.id] ?? []; track m) { <option [value]="m"></option> }</datalist>
-    }
+
 
     @if (live.agents().length === 0) {
       <div class="empty-state">
@@ -68,12 +69,14 @@ const BUSY: AgentState[] = ['working', 'running_checks', 'addressing_review', 'w
             <form (ngSubmit)="save(a)" class="worker-edit">
               <label>Name <input [(ngModel)]="edit.name" name="name" required maxlength="40" /></label>
               <label>AI provider
-                <select [(ngModel)]="edit.provider" name="provider" (ngModelChange)="loadModels($event)">
+                <select [(ngModel)]="edit.provider" name="provider">
                   <option value="">Default for workers ({{ defaultName() }})</option>
                   @for (p of providers(); track p.id) { <option [value]="p.id">{{ p.name }}</option> }
                 </select>
               </label>
-              <label>Model <input [(ngModel)]="edit.model" name="model" [attr.list]="'wm-' + (edit.provider || defaultId())" placeholder="Default" spellcheck="false" /></label>
+              <div class="field"><span class="field-label">Model</span>
+                <app-model-select [provider]="edit.provider || defaultId()" [(value)]="edit.model" [selectId]="'edit-model-' + a.id" label="Model" defaultLabel="Default model" />
+              </div>
               <div class="row">
                 <button class="primary" type="submit" [disabled]="!edit.name.trim() || busy()">Save</button>
                 <button type="button" class="quiet" (click)="editing.set('')">Cancel</button>
@@ -118,7 +121,6 @@ export class AgentsPage {
   edit = { name: '', provider: '', model: '' };
   readonly providers = signal<ProviderView[]>([]);
   readonly defaultId = signal('claude');
-  readonly models = signal<Record<string, string[]>>({});
 
   readonly summary = computed(() => {
     const counts = new Map<AgentState, number>();
@@ -130,7 +132,6 @@ export class AgentsPage {
     void this.api.providers?.().then((i) => {
       this.providers.set(i.providers);
       this.defaultId.set(i.roles.worker.provider);
-      void this.loadModels(i.roles.worker.provider);
     }, () => undefined);
   }
 
@@ -141,13 +142,6 @@ export class AgentsPage {
   providerName(id: string): string {
     const pid = id || this.defaultId();
     return this.providers().find((p) => p.id === pid)?.name ?? pid;
-  }
-
-  async loadModels(id: string): Promise<void> {
-    const pid = id || this.defaultId();
-    if (this.models()[pid] || !this.api.providerModels) return;
-    const list = await this.api.providerModels(pid).catch(() => [] as string[]);
-    this.models.update((m) => ({ ...m, [pid]: list }));
   }
 
   runFor(a: Agent) {
@@ -165,7 +159,6 @@ export class AgentsPage {
 
   startEdit(a: Agent): void {
     this.edit = { name: a.name, provider: a.provider ?? '', model: a.model };
-    void this.loadModels(a.provider ?? '');
     this.editing.set(a.id);
   }
 

@@ -424,3 +424,10 @@ input[aria-invalid='true'] { border-color: var(--bad); }
 .msg-model { opacity: .85; }
 .chat-log .action-card { max-width: 100%; align-self: stretch; }
 .chat-log .action-card .action-text { flex: 1 1 100%; min-width: 0; overflow-wrap: anywhere; }
+.model-select { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.model-select select, .model-select input { width: 100%; }
+.model-select-row { display: flex; gap: 4px; align-items: center; }
+.model-select-row select { flex: 1; min-width: 0; }
+.link-btn { border: 0; background: none; padding: 0; color: var(--accent); cursor: pointer; font: inherit; text-decoration: underline; }
+.field { display: flex; flex-direction: column; gap: 4px; margin-bottom: 12px; font-weight: 500; flex: 1; min-width: 160px; }
+.field-label { font-weight: 500; }

@@ -2,6 +2,7 @@ import { Component, effect, inject, input, signal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { Api } from '../api';
 import { ROLE_LABEL, type ProvidersInfo, type Role } from '../models';
+import { ModelSelect } from '../ui/model-select';
 import { Toasts } from '../ui/toast';
 
 const ROLES: Role[] = ['worker', 'reviewer', 'planner', 'assistant'];
@@ -9,7 +10,7 @@ const ROLES: Role[] = ['worker', 'reviewer', 'planner', 'assistant'];
 /** Which AI this project uses per role, when it differs from the defaults in Settings. */
 @Component({
   selector: 'app-project-ai',
-  imports: [FormsModule],
+  imports: [FormsModule, ModelSelect],
   template: `
     <fieldset>
       <legend>AI for this project</legend>
@@ -25,9 +26,10 @@ const ROLES: Role[] = ['worker', 'reviewer', 'planner', 'assistant'];
                   @for (p of i.providers; track p.id) { <option [value]="p.id">{{ p.name }}</option> }
                 </select>
               </label>
-              <label><span class="sr-only">{{ roleLabel[r].label }} model</span>
-                <input [(ngModel)]="rows[r].model" [name]="'pm-' + r" [disabled]="!rows[r].provider" placeholder="Model" spellcheck="false" />
-              </label>
+              @if (rows[r].provider) {
+                <app-model-select [provider]="rows[r].provider" [(value)]="rows[r].model" [selectId]="'pm-' + r" [label]="roleLabel[r].label + ' model'"
+                  [defaultLabel]="kindOf(rows[r].provider) === 'openai' ? '' : 'Default model'" />
+              } @else { <span class="hint">Uses the default</span> }
             </div>
           }
           <div class="row"><button class="primary" type="submit" [disabled]="busy()">Save AI choices</button></div>
@@ -56,6 +58,10 @@ export class ProjectAi {
         this.info.set(i);
       }, () => undefined);
     });
+  }
+
+  kindOf(id: string): string {
+    return this.info()?.providers.find((p) => p.id === id)?.kind ?? '';
   }
 
   nameOf(id: string): string {

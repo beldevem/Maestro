@@ -4,6 +4,8 @@ import { Api } from '../api';
 import { ROLE_LABEL, type Choice, type CliPreset, type OpenAIPreset, type ProviderConfig, type ProviderKind, type ProvidersInfo, type ProviderView, type Role } from '../models';
 import { Confirm } from '../ui/confirm';
 import { Icon } from '../ui/icon';
+import { ModelCatalog } from '../ui/model-catalog';
+import { ModelSelect } from '../ui/model-select';
 import { Toasts } from '../ui/toast';
 
 const ROLES: Role[] = ['worker', 'reviewer', 'planner', 'assistant'];
@@ -44,7 +46,7 @@ export function providerStatus(p: ProviderView): { ok: boolean; text: string } {
 /** Settings step 1: which AI does the work, and which model each role uses. */
 @Component({
   selector: 'app-ai-providers',
-  imports: [FormsModule, Icon],
+  imports: [FormsModule, Icon, ModelSelect],
   template: `
     @if (info(); as i) {
       <h3 class="sub-head">Providers</h3>
@@ -158,19 +160,17 @@ export function providerStatus(p: ProviderView): { ok: boolean; text: string } {
             <div class="role-row" role="row">
               <div role="cell"><strong>{{ roleLabel[r].label }}</strong><small class="field-hint">{{ roleLabel[r].hint }}</small></div>
               <label role="cell"><span class="sr-only">{{ roleLabel[r].label }} provider</span>
-                <select [(ngModel)]="choices[r].provider" [name]="'p-' + r" (ngModelChange)="loadModels($event)">
+                <select [(ngModel)]="choices[r].provider" [name]="'p-' + r">
                   @for (p of i.providers; track p.id) { <option [value]="p.id">{{ p.name }}</option> }
                 </select>
               </label>
-              <label role="cell"><span class="sr-only">{{ roleLabel[r].label }} model</span>
-                <input [(ngModel)]="choices[r].model" [name]="'m-' + r" [attr.list]="'models-' + choices[r].provider" spellcheck="false" [placeholder]="modelPlaceholder(choices[r].provider)" />
-              </label>
+              <div role="cell">
+                <app-model-select [provider]="choices[r].provider" [(value)]="choices[r].model" [selectId]="'m-' + r" [label]="roleLabel[r].label + ' model'"
+                  [defaultLabel]="kindOf(choices[r].provider) === 'claude' ? 'Recommended for this role' : kindOf(choices[r].provider) === 'cli' ? 'The CLI’s default model' : ''" />
+              </div>
             </div>
           }
         </div>
-        @for (p of i.providers; track p.id) {
-          <datalist [id]="'models-' + p.id">@for (m of models()[p.id] ?? []; track m) { <option [value]="m"></option> }</datalist>
-        }
         @for (w of roleWarnings(); track w) { <p class="warn">{{ w }}</p> }
         <div class="row"><button class="primary" type="submit" [disabled]="busy()">Save assignments</button></div>
       </form>
@@ -185,6 +185,7 @@ export class AiProviders {
   private readonly api = inject(Api);
   private readonly toasts = inject(Toasts);
   private readonly confirm = inject(Confirm);
+  private readonly catalog = inject(ModelCatalog);
   /** Emitted after anything changes, so the page can refresh step statuses. */
   readonly changed = output<ProvidersInfo>();
   readonly roles = ROLES;
@@ -198,7 +199,6 @@ export class AiProviders {
   readonly busy = signal(false);
   readonly testing = signal('');
   readonly results = signal<Record<string, { ok: boolean; message: string }>>({});
-  readonly models = signal<Record<string, string[]>>({});
   choices = {} as Record<Role, Choice>;
   claudeKey = '';
 
@@ -214,7 +214,6 @@ export class AiProviders {
       const i = await this.api.providers();
       this.info.set(i);
       this.choices = Object.fromEntries(ROLES.map((r) => [r, { ...i.roles[r] }])) as Record<Role, Choice>;
-      for (const p of new Set(ROLES.map((r) => i.roles[r].provider))) void this.loadModels(p);
       this.changed.emit(i);
       this.error.set('');
     } catch (e) {
@@ -226,15 +225,8 @@ export class AiProviders {
     return providerStatus(p);
   }
 
-  async loadModels(id: string): Promise<void> {
-    if (this.models()[id]) return;
-    const list = await this.api.providerModels(id).catch(() => [] as string[]);
-    this.models.update((m) => ({ ...m, [id]: list }));
-  }
-
-  modelPlaceholder(id: string): string {
-    const p = this.info()?.providers.find((x) => x.id === id);
-    return p?.kind === 'claude' ? 'Default for the role' : p?.kind === 'cli' ? "The CLI's default" : 'Model name, e.g. qwen3-coder:30b';
+  kindOf(id: string): string {
+    return this.info()?.providers.find((x) => x.id === id)?.kind ?? '';
   }
 
   roleWarnings(): string[] {
@@ -317,7 +309,7 @@ export class AiProviders {
       await this.api.saveProvider(cfg);
       this.draft.set(null);
       this.toasts.ok(`${cfg.name} saved.`);
-      this.models.update((m) => ({ ...m, [cfg.id]: undefined as unknown as string[] }));
+      this.catalog.forget(cfg.id);
       await this.load();
     } catch (e) {
       this.formError.set((e as Error).message);
@@ -343,7 +335,7 @@ export class AiProviders {
     try {
       const r = await this.api.testProvider(p.id);
       this.results.update((x) => ({ ...x, [p.id]: r }));
-      if (r.models) this.models.update((m) => ({ ...m, [p.id]: r.models! }));
+      if (r.models) this.catalog.forget(p.id);
     } catch (e) {
       this.results.update((x) => ({ ...x, [p.id]: { ok: false, message: (e as Error).message } }));
     } finally {

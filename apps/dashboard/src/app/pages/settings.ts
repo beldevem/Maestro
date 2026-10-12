@@ -15,7 +15,7 @@ interface Field {
   key: string;
   label: string;
   hint: string;
-  type: 'text' | 'number';
+  type: 'number';
   min?: number;
   step?: number;
 }
@@ -31,7 +31,6 @@ interface Step {
   note?: string;
 }
 
-const MODELS = ['claude-opus-5-5', 'claude-sonnet-5-5', 'claude-haiku-4-5-20251001'];
 
 const STEPS: Step[] = [
   {
@@ -150,15 +149,10 @@ const STEPS: Step[] = [
                   @for (f of s.fields; track f.key) {
                     <label>
                       {{ f.label }}
-                      @if (f.type === 'number') {
-                        <input type="number" [attr.min]="f.min ?? null" [attr.step]="f.step ?? null" [(ngModel)]="settings[f.key]" [name]="f.key" [attr.aria-invalid]="!!fieldError(f)" [attr.aria-describedby]="'h-' + f.key" />
-                      } @else {
-                        <input type="text" [(ngModel)]="settings[f.key]" [name]="f.key" list="models" spellcheck="false" [attr.aria-describedby]="'h-' + f.key" />
-                      }
+                      <input type="number" [attr.min]="f.min ?? null" [attr.step]="f.step ?? null" [(ngModel)]="settings[f.key]" [name]="f.key" [attr.aria-invalid]="!!fieldError(f)" [attr.aria-describedby]="'h-' + f.key" />
                       <small [id]="'h-' + f.key" [class.error]="!!fieldError(f)" class="field-hint">{{ fieldError(f) || f.hint }}</small>
                     </label>
                   }
-                  <datalist id="models">@for (m of models; track m) { <option [value]="m"></option> }</datalist>
                   <div class="row">
                     <button class="primary" type="submit" [disabled]="busy() || hasErrors(s)">Save {{ s.title.toLowerCase() }}</button>
                   </div>
@@ -194,7 +188,6 @@ export class SettingsPage {
   private readonly toasts = inject(Toasts);
   private readonly router = inject(Router);
   readonly steps = STEPS;
-  readonly models = MODELS;
   readonly secrets = signal<SecretInfo[]>([]);
   readonly backend = signal<'keychain' | 'file'>('file');
   readonly active = signal<StepId>((inject(ActivatedRoute).snapshot.queryParamMap.get('step') as StepId) || 'ai');
