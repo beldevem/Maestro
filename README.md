@@ -40,11 +40,12 @@ It covers the whole plan: the board and worker agents, the planner and auto-assi
 - **Metrics** per project or across all, for all time or the last 7 or 30 days: runs, success rate, mean time to PR, mean cycle time, first-pass review rate, fix attempts and review rounds per run, cost per ticket, and a per-ticket table.
 - **Alerts** when an agent is blocked, a run fails, a budget is reached or a change is ready for review: in the Alerts screen (with an unread count in the menu) and, if you turn them on in Settings, as desktop notifications from the browser.
 - **Secrets in the system keychain** through `secret-tool` (libsecret: GNOME Keyring or KWallet) when it is installed, with no native npm module; otherwise in `~/.maestro/secrets.json`, readable only by you. Secrets already in the file move into the keychain on the first start that finds one. `MAESTRO_SECRETS=file` or `keychain` forces a choice.
-- **Settings** hold API keys and tokens, the default models (worker, chat, planner), how many tickets run at once, and a budget per run.
+- **Model dropdowns**: wherever you pick a model (roles, workers, project overrides, the chat), the list comes from the provider itself: Claude's models, the models an OpenAI-compatible server reports (`/v1/models`, with a refresh button), or the CLI's own default. "Other model…" lets you type one it doesn't list. Changing the provider resets a model it doesn't offer, and the engine refuses such a pair too.
+- **Settings** hold the AI providers and who does what, API keys and tokens, how many tickets run at once, and the budgets.
 
 ## Known limits
 
-- Coding CLIs (Copilot CLI, Codex, Gemini CLI, Aider, OpenCode) are not in the Docker image; install them where the engine runs, and check the preset's flags against your version's `--help`. Their cost is not tracked, and they don't resume sessions between fix rounds.
+- Coding CLIs (Copilot CLI, Codex, Gemini CLI, Aider, OpenCode) are not in the Docker image unless you build it with `EXTRA_NPM_CLIS`; install them where the engine runs, and check the preset's flags against your version's `--help`. Their cost is not tracked, and they don't resume sessions between fix rounds.
 - Local models need tool calling for workers (most current coding models have it) and do better with a larger context than Ollama's default; small models may need more fix attempts.
 
 - Dependencies live in Maestro's database and are written into the ticket text ("Depends on: KEY"). On Jira they are also added as "Blocks" links; Trello has no links.
@@ -104,6 +105,15 @@ docker compose down       # stop (data stays)
 - **Coding CLIs** as AI providers aren't in the image by default. Set `EXTRA_NPM_CLIS` in `.env` (for example `@github/copilot @openai/codex`) and rebuild, then sign them in inside the container (`docker compose exec maestro copilot`) or pass their tokens through `.env`.
 - **Quality gates** run inside the container, which has Node 24 and git. Projects that need other tools (Python, Java...) need an image built on top of this one.
 - **Docker gate sandbox** (opt-in): `docker compose -f docker-compose.yml -f docker-compose.sandbox.yml up -d --build` with `DOCKER_GID` set. This mounts the Docker socket, which is root-equivalent access to this machine; only use it if you accept that.
+
+## Operating it
+
+- **Health**: `GET /api/health` answers while the process is up; `GET /api/ready` answers 200 once the database works and 503 while the engine shuts down. The Docker health check uses `/api/ready`.
+- **Logs**: one line per event with a level. `MAESTRO_LOG_LEVEL` (`debug`, `info`, `warn`, `error`; default `info`) and `MAESTRO_LOG_FORMAT=json` for a log collector. API keys, tokens, passwords and credentials in URLs are masked, as is every secret the engine has loaded.
+- **Stopping**: on SIGTERM or Ctrl-C the engine stops its loops and running agents, closes the server and the database, and exits within about 15 seconds (compose waits 20). Runs that were in flight are picked up on the next start: one addressing feedback goes back to review, the others are marked failed with their branch kept.
+- **Database**: SQLite in WAL mode with a 5-second busy timeout. Schema changes are versioned (`PRAGMA user_version`) and applied once, in order, at start; an engine refuses a database from a newer Maestro. To back up, copy `maestro.db` while the engine is stopped, or use `sqlite3 maestro.db ".backup backup.db"`.
+- **Outbound calls** time out: 30 seconds for APIs (code hosts, PM tools, Figma, Confluence, model lists) and 15 minutes for a model's reply.
+- **Image**: the Node base image is pinned by digest in the `Dockerfile` (`NODE_IMAGE`); the image installs only production dependencies and runs as a non-root user under `tini`.
 
 ## First steps
 
