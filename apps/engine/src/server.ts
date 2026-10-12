@@ -282,7 +282,7 @@ export async function buildServer(d: ServerDeps): Promise<FastifyInstance> {
   });
   app.post<{ Params: { id: string; key: string }; Body: { agentId?: string; force?: boolean } }>(
     '/api/projects/:id/tickets/:key/start',
-    async (req) => d.orchestrator.start(req.params.id, req.params.key, req.body ?? {}),
+    async (req) => d.orchestrator.start(req.params.id, req.params.key, z.object({ agentId: z.string().optional(), force: z.boolean().optional() }).parse(req.body ?? {})),
   );
   // Projects without a PM tool have nowhere else to move tickets, e.g. to done after review.
   app.post<{ Params: { id: string; key: string } }>('/api/projects/:id/tickets/:key/status', async (req) => {
@@ -435,7 +435,7 @@ export async function buildServer(d: ServerDeps): Promise<FastifyInstance> {
   app.post<{ Params: { id: string }; Body: { action: 'pause' | 'resume' | 'unblock' } }>('/api/agents/:id/action', async (req) => {
     const a = d.store.getAgent(req.params.id);
     if (!a) throw Object.assign(new Error('Agent not found.'), { statusCode: 404 });
-    return agentAction(a, req.body?.action);
+    return agentAction(a, z.object({ action: z.enum(['pause', 'resume', 'unblock']) }).parse(req.body ?? {}).action);
   });
   app.delete<{ Params: { id: string } }>('/api/agents/:id', async (req) => {
     const a = d.store.getAgent(req.params.id);
@@ -655,7 +655,7 @@ export async function buildServer(d: ServerDeps): Promise<FastifyInstance> {
 
   // Metrics from the runs, for one project or all
   app.get<{ Querystring: { projectId?: string; days?: string } }>('/api/metrics', async (req) => {
-    const days = Number(req.query.days ?? 0);
+    const { days } = z.object({ days: z.coerce.number().int().min(0).max(3650).default(0) }).parse(req.query);
     const since = days > 0 ? new Date(Date.now() - days * 86_400_000).toISOString() : '';
     const runs = d.store.listAllRuns(req.query.projectId).filter((r) => r.startedAt >= since);
     return computeMetrics(runs, (id) => d.store.listReviews(id));
