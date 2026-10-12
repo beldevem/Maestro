@@ -59,6 +59,8 @@ export interface Agent {
   id: string;
   name: string;
   role: string;
+  /** The worker's own AI provider; empty uses the project's or the default. */
+  provider: string;
   model: string;
   state: AgentState;
   currentRunId: string | null;
@@ -126,6 +128,45 @@ export const CHECKS_LABEL: Record<ChecksState, string> = {
   success: 'Checks passed',
   failure: 'Checks failed',
   none: 'No checks',
+};
+
+export type ProviderKind = 'claude' | 'openai' | 'cli';
+export type Role = 'worker' | 'reviewer' | 'planner' | 'assistant';
+
+export interface ProviderConfig {
+  id: string;
+  name: string;
+  kind: ProviderKind;
+  baseUrl: string;
+  apiKeySecret: string;
+  structuredOutput: 'json_schema' | 'json_object' | 'prompt';
+  prices: Record<string, { input: number; output: number }>;
+  cli?: { preset: string; command: string; args: string[]; modelArgs: string[]; timeoutMinutes: number };
+}
+
+export interface ProviderView extends ProviderConfig {
+  keySet: boolean;
+  installed?: boolean;
+  claudeLogin?: { found: boolean; valid: boolean; message: string };
+  warnings: string[];
+}
+
+export interface OpenAIPreset { id: string; name: string; baseUrl: string; dockerBaseUrl?: string; needsKey: boolean; keyHint: string; structuredOutput: ProviderConfig['structuredOutput'] }
+export interface CliPreset { id: string; name: string; command: string; args: string[]; modelArgs: string[]; install: string; auth: string; installed: boolean }
+export interface Choice { provider: string; model: string }
+
+export interface ProvidersInfo {
+  providers: ProviderView[];
+  roles: Record<Role, Choice>;
+  presets: { openai: OpenAIPreset[]; cli: CliPreset[]; claudeModels: string[] };
+  inDocker: boolean;
+}
+
+export const ROLE_LABEL: Record<Role, { label: string; hint: string }> = {
+  worker: { label: 'Workers', hint: 'Write the code for each ticket. Needs file and command tools.' },
+  reviewer: { label: 'Reviewer', hint: 'Reviews each change; answers in JSON.' },
+  planner: { label: 'Planner', hint: 'Turns requirements into a backlog; answers in JSON.' },
+  assistant: { label: 'Chat', hint: 'Answers your questions on the Dashboard.' },
 };
 
 export interface RunBrief {

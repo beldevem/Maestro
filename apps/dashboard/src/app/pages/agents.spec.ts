@@ -8,7 +8,7 @@ import { Confirm } from '../ui/confirm';
 import { Toasts } from '../ui/toast';
 import { AgentsPage } from './agents';
 
-const agent = (over: Partial<Agent>): Agent => ({ id: 'a1', name: 'Worker 1', role: 'worker', model: '', state: 'available', currentRunId: null, note: '', ...over });
+const agent = (over: Partial<Agent>): Agent => ({ id: 'a1', name: 'Worker 1', role: 'worker', provider: '', model: '', state: 'available', currentRunId: null, note: '', ...over });
 
 async function mount(api: Partial<Api>, agents: Agent[]) {
   const live = { agents: signal(agents), runs: signal([]), refresh: vi.fn().mockResolvedValue(undefined) };
@@ -26,9 +26,9 @@ describe('AgentsPage', () => {
     const updateAgent = vi.fn().mockResolvedValue(agent({ name: 'Ada' }));
     const { f, live } = await mount({ updateAgent } as Partial<Api>, [agent({})]);
     f.componentInstance.startEdit(agent({}));
-    f.componentInstance.edit = { name: ' Ada ', model: 'claude-opus-5-5' };
+    f.componentInstance.edit = { name: ' Ada ', provider: 'ollama', model: 'qwen3-coder:30b' };
     await f.componentInstance.save(agent({}));
-    expect(updateAgent).toHaveBeenCalledWith('a1', { name: 'Ada', model: 'claude-opus-5-5' });
+    expect(updateAgent).toHaveBeenCalledWith('a1', { name: 'Ada', provider: 'ollama', model: 'qwen3-coder:30b' });
     expect(live.refresh).toHaveBeenCalled();
     expect(f.componentInstance.editing()).toBe('');
   });

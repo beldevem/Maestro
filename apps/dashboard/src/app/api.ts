@@ -1,5 +1,5 @@
 import { Injectable } from '@angular/core';
-import type { Agent, Alert, BacklogDraft, ChatAction, ChatMessage, Metrics, Overview, ProjectTemplate, ProjectSpend, BacklogItem, Project, PullRequestRow, Review, ReviewComment, Run, RunEvent, SecretInfo, Ticket, TicketStatus } from './models';
+import type { Agent, Alert, BacklogDraft, ChatAction, ChatMessage, Choice, Metrics, Overview, ProviderConfig, ProviderView, ProvidersInfo, Role, ProjectTemplate, ProjectSpend, BacklogItem, Project, PullRequestRow, Review, ReviewComment, Run, RunEvent, SecretInfo, Ticket, TicketStatus } from './models';
 
 export class ApiError extends Error {
   constructor(message: string, readonly status: number, readonly reasons: string[] = []) {
@@ -89,6 +89,14 @@ export class Api {
   setProjectBudget = (projectId: string, dailyUsd: number | null) => this.call<{ dailyCap: number }>('PUT', `/projects/${projectId}/budget`, { dailyUsd });
 
   settings = () => this.call<{ settings: Record<string, string>; secrets: SecretInfo[]; secretsBackend: 'keychain' | 'file' }>('GET', '/settings');
+  providers = () => this.call<ProvidersInfo>('GET', '/providers');
+  saveProvider = (p: ProviderConfig) => this.call<ProviderView>('PUT', `/providers/${p.id}`, p);
+  deleteProvider = (id: string) => this.call('DELETE', `/providers/${id}`);
+  testProvider = (id: string) => this.call<{ ok: boolean; message: string; models?: string[] }>('POST', `/providers/${id}/test`, {});
+  providerModels = (id: string) => this.call<string[]>('GET', `/providers/${id}/models`);
+  saveRoles = (roles: Partial<Record<Role, Choice>>) => this.call<Record<Role, Choice>>('PUT', '/roles', roles);
+  projectRoles = (projectId: string) => this.call<Partial<Record<Role, Choice>>>('GET', `/projects/${projectId}/roles`);
+  saveProjectRoles = (projectId: string, roles: Partial<Record<Role, Choice | null>>) => this.call<Partial<Record<Role, Choice>>>('PUT', `/projects/${projectId}/roles`, roles);
   testConnection = (provider: string) => this.call<{ ok: boolean; message: string }>('POST', `/settings/test/${provider}`, {});
   saveSettings = (s: Record<string, string>) => this.call('PUT', '/settings', s);
   setSecret = (name: string, value: string) => this.call('PUT', `/secrets/${name}`, { value });

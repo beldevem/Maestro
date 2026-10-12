@@ -7,6 +7,7 @@ import { Live } from '../live';
 import { RUN_LABEL, STATUS_LABEL, type BacklogDraft, type ProjectSpend, type Project, type Ticket, type TicketStatus } from '../models';
 import { BacklogDraftPanel } from './backlog-draft';
 import { ChatPanel } from '../components/chat-panel';
+import { ProjectAi } from '../components/project-ai';
 import { Confirm } from '../ui/confirm';
 import { Icon } from '../ui/icon';
 import { Toasts } from '../ui/toast';
@@ -17,7 +18,7 @@ type Tab = 'board' | 'knowledge' | 'workflow' | 'runs' | 'chat' | 'connectors';
 
 @Component({
   selector: 'app-project',
-  imports: [FormsModule, RouterLink, DatePipe, DecimalPipe, ConnectorFields, BacklogDraftPanel, ChatPanel, Icon],
+  imports: [FormsModule, RouterLink, DatePipe, DecimalPipe, ConnectorFields, BacklogDraftPanel, ChatPanel, Icon, ProjectAi],
   template: `
     @if (project(); as p) {
       <header class="page-head">
@@ -187,7 +188,7 @@ type Tab = 'board' | 'knowledge' | 'workflow' | 'runs' | 'chat' | 'connectors';
           <form class="panel" (ngSubmit)="save({ codeHost: p.codeHost, pm: p.pm, design: p.design, docs: p.docs })">
             <app-connector-fields [model]="p" />
             <div class="row">
-              <button class="primary" type="submit">Save</button>
+              <button class="primary" type="submit">Save connectors</button>
               <button type="button" (click)="check()">Test connections</button>
               <button type="button" class="danger" (click)="remove()"><app-icon name="trash" [size]="14" /> Delete project</button>
             </div>
@@ -195,6 +196,7 @@ type Tab = 'board' | 'knowledge' | 'workflow' | 'runs' | 'chat' | 'connectors';
               <p [class.ok]="c.ok" [class.error]="!c.ok">{{ c.name }}: {{ c.message }}</p>
             }
           </form>
+          <div class="panel"><app-project-ai [projectId]="p.id" /></div>
         }
       }
     } @else {

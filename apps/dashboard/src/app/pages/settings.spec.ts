@@ -13,8 +13,19 @@ const settings = () => Promise.resolve({
   secrets, secretsBackend: 'file' as const,
 });
 
+const providersInfo = {
+  providers: [
+    { id: 'claude', name: 'Claude', kind: 'claude', baseUrl: '', apiKeySecret: 'ANTHROPIC_API_KEY', structuredOutput: 'json_schema', prices: {}, keySet: false, claudeLogin: { found: true, valid: false, message: 'The Claude Code login has expired.' }, warnings: [] },
+    { id: 'ollama', name: 'Ollama (local)', kind: 'openai', baseUrl: 'http://localhost:11434/v1', apiKeySecret: '', structuredOutput: 'json_schema', prices: {}, keySet: false, warnings: [] },
+  ],
+  roles: { worker: { provider: 'ollama', model: 'qwen3-coder:30b' }, reviewer: { provider: 'ollama', model: 'qwen3-coder:30b' }, planner: { provider: 'claude', model: '' }, assistant: { provider: 'claude', model: '' } },
+  presets: { openai: [], cli: [], claudeModels: [] },
+  inDocker: true,
+};
+const providers = () => Promise.resolve(providersInfo);
+
 async function mount(api: Partial<Api>) {
-  await TestBed.configureTestingModule({ imports: [SettingsPage], providers: [provideRouter([]), { provide: Api, useValue: { settings, ...api } }] }).compileComponents();
+  await TestBed.configureTestingModule({ imports: [SettingsPage], providers: [provideRouter([]), { provide: Api, useValue: { settings, providers, providerModels: () => Promise.resolve([]), ...api } }] }).compileComponents();
   const fixture = TestBed.createComponent(SettingsPage);
   fixture.detectChanges();
   await fixture.whenStable();
@@ -28,7 +39,7 @@ describe('SettingsPage', () => {
     const f = await mount({});
     const heads = [...(f.nativeElement as HTMLElement).querySelectorAll('.step-head')].map((h) => h.textContent?.replace(/\s+/g, ' ').trim());
     expect(heads).toEqual([
-      '1 AI and modelsUses your Claude Code login',
+      '1 AI providersOllama (local) · Claude: needs attention',
       'Code hosts1 connected',
       '3 PM toolsOptional',
       '4 Design and docsOptional',
@@ -36,6 +47,7 @@ describe('SettingsPage', () => {
       '6 NotificationsOff',
     ]);
     expect(text(f)).toContain('2 of 6 steps set up');
+    expect(text(f)).not.toContain('Agents run on Claude');
   });
 
   it('saves only the open step, and validates numbers before sending', async () => {
@@ -61,7 +73,7 @@ describe('SettingsPage', () => {
     const saveSettings = vi.fn().mockRejectedValue(new ApiError('budget.perRunUsd must be a number.', 400));
     const f = await mount({ saveSettings } as Partial<Api>);
     const toasts = TestBed.inject(Toasts);
-    await f.componentInstance.saveFields(f.componentInstance.steps.find((s) => s.id === 'ai')!);
+    await f.componentInstance.saveFields(f.componentInstance.steps.find((s) => s.id === 'limits')!);
     expect(toasts.list().map((t) => [t.kind, t.text])).toEqual([['error', 'budget.perRunUsd must be a number.']]);
   });
 

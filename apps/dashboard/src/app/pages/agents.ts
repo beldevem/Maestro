@@ -3,12 +3,11 @@ import { FormsModule } from '@angular/forms';
 import { RouterLink } from '@angular/router';
 import { Api } from '../api';
 import { Live } from '../live';
-import { STATE_LABEL, type Agent, type AgentState } from '../models';
+import { STATE_LABEL, type Agent, type AgentState, type ProviderView } from '../models';
 import { Confirm } from '../ui/confirm';
 import { Icon } from '../ui/icon';
 import { Toasts } from '../ui/toast';
 
-const MODELS = ['claude-opus-5-5', 'claude-sonnet-5-5', 'claude-haiku-4-5-20251001'];
 const BUSY: AgentState[] = ['working', 'running_checks', 'addressing_review', 'waiting_review'];
 
 /** The workers that implement tickets: add, rename, change model, pause, delete. */
@@ -19,7 +18,7 @@ const BUSY: AgentState[] = ['working', 'running_checks', 'addressing_review', 'w
     <header class="page-head">
       <div>
         <h1>Workers</h1>
-        <p class="page-sub">Each worker takes one ticket at a time. Reviewing, planning and chat use the models set in Settings.</p>
+        <p class="page-sub">Each worker takes one ticket at a time, using its own AI provider or the one set for workers in Settings.</p>
       </div>
       <button class="primary" (click)="startAdd()"><app-icon name="plus" [size]="16" /> Add worker</button>
     </header>
@@ -35,7 +34,13 @@ const BUSY: AgentState[] = ['working', 'running_checks', 'addressing_review', 'w
         <h2>New worker</h2>
         <div class="row">
           <label>Name <input [(ngModel)]="draft.name" name="name" required maxlength="40" placeholder="Worker 3" /></label>
-          <label>Model <input [(ngModel)]="draft.model" name="model" list="worker-models" placeholder="Default from Settings" spellcheck="false" /></label>
+          <label>AI provider
+            <select [(ngModel)]="draft.provider" name="provider" (ngModelChange)="loadModels($event)">
+              <option value="">Default for workers ({{ defaultName() }})</option>
+              @for (p of providers(); track p.id) { <option [value]="p.id">{{ p.name }}</option> }
+            </select>
+          </label>
+          <label>Model <input [(ngModel)]="draft.model" name="model" [attr.list]="'wm-' + (draft.provider || defaultId())" placeholder="Default" spellcheck="false" /></label>
         </div>
         <div class="row">
           <button class="primary" type="submit" [disabled]="!draft.name.trim() || busy()">Add worker</button>
@@ -43,7 +48,9 @@ const BUSY: AgentState[] = ['working', 'running_checks', 'addressing_review', 'w
         </div>
       </form>
     }
-    <datalist id="worker-models">@for (m of models; track m) { <option [value]="m"></option> }</datalist>
+    @for (p of providers(); track p.id) {
+      <datalist [id]="'wm-' + p.id">@for (m of models()[p.id] ?? []; track m) { <option [value]="m"></option> }</datalist>
+    }
 
     @if (live.agents().length === 0) {
       <div class="empty-state">
@@ -60,7 +67,13 @@ const BUSY: AgentState[] = ['working', 'running_checks', 'addressing_review', 'w
           @if (editing() === a.id) {
             <form (ngSubmit)="save(a)" class="worker-edit">
               <label>Name <input [(ngModel)]="edit.name" name="name" required maxlength="40" /></label>
-              <label>Model <input [(ngModel)]="edit.model" name="model" list="worker-models" placeholder="Default from Settings" spellcheck="false" /></label>
+              <label>AI provider
+                <select [(ngModel)]="edit.provider" name="provider" (ngModelChange)="loadModels($event)">
+                  <option value="">Default for workers ({{ defaultName() }})</option>
+                  @for (p of providers(); track p.id) { <option [value]="p.id">{{ p.name }}</option> }
+                </select>
+              </label>
+              <label>Model <input [(ngModel)]="edit.model" name="model" [attr.list]="'wm-' + (edit.provider || defaultId())" placeholder="Default" spellcheck="false" /></label>
               <div class="row">
                 <button class="primary" type="submit" [disabled]="!edit.name.trim() || busy()">Save</button>
                 <button type="button" class="quiet" (click)="editing.set('')">Cancel</button>
@@ -71,7 +84,7 @@ const BUSY: AgentState[] = ['working', 'running_checks', 'addressing_review', 'w
               <h2>{{ a.name }}</h2>
               <span class="state state-{{ a.state }}">{{ stateLabel[a.state] }}</span>
             </div>
-            <p class="meta">{{ a.model || 'Default model (Settings)' }}</p>
+            <p class="meta">{{ providerName(a.provider) }} · {{ a.model || 'default model' }}</p>
             @if (a.note) { <p>{{ a.note }}</p> }
             @if (runFor(a); as r) {
               <p><a [routerLink]="['/runs', r.id]">{{ r.ticketKey }}: {{ r.ticketTitle }}</a></p>
@@ -98,18 +111,44 @@ export class AgentsPage {
   private readonly confirm = inject(Confirm);
   readonly live = inject(Live);
   readonly stateLabel = STATE_LABEL;
-  readonly models = MODELS;
   readonly adding = signal(false);
   readonly editing = signal('');
   readonly busy = signal(false);
-  draft = { name: '', model: '' };
-  edit = { name: '', model: '' };
+  draft = { name: '', provider: '', model: '' };
+  edit = { name: '', provider: '', model: '' };
+  readonly providers = signal<ProviderView[]>([]);
+  readonly defaultId = signal('claude');
+  readonly models = signal<Record<string, string[]>>({});
 
   readonly summary = computed(() => {
     const counts = new Map<AgentState, number>();
     for (const a of this.live.agents()) counts.set(a.state, (counts.get(a.state) ?? 0) + 1);
     return [...counts].map(([state, count]) => ({ state, count, label: STATE_LABEL[state] }));
   });
+
+  constructor() {
+    void this.api.providers?.().then((i) => {
+      this.providers.set(i.providers);
+      this.defaultId.set(i.roles.worker.provider);
+      void this.loadModels(i.roles.worker.provider);
+    }, () => undefined);
+  }
+
+  defaultName(): string {
+    return this.providerName('');
+  }
+
+  providerName(id: string): string {
+    const pid = id || this.defaultId();
+    return this.providers().find((p) => p.id === pid)?.name ?? pid;
+  }
+
+  async loadModels(id: string): Promise<void> {
+    const pid = id || this.defaultId();
+    if (this.models()[pid] || !this.api.providerModels) return;
+    const list = await this.api.providerModels(pid).catch(() => [] as string[]);
+    this.models.update((m) => ({ ...m, [pid]: list }));
+  }
 
   runFor(a: Agent) {
     return a.currentRunId ? this.live.runs().find((r) => r.id === a.currentRunId) : undefined;
@@ -120,18 +159,19 @@ export class AgentsPage {
   }
 
   startAdd(): void {
-    this.draft = { name: `Worker ${this.live.agents().length + 1}`, model: '' };
+    this.draft = { name: `Worker ${this.live.agents().length + 1}`, provider: '', model: '' };
     this.adding.set(true);
   }
 
   startEdit(a: Agent): void {
-    this.edit = { name: a.name, model: a.model };
+    this.edit = { name: a.name, provider: a.provider ?? '', model: a.model };
+    void this.loadModels(a.provider ?? '');
     this.editing.set(a.id);
   }
 
   async add(): Promise<void> {
     await this.run(async () => {
-      await this.api.createAgent({ name: this.draft.name.trim(), model: this.draft.model.trim(), role: 'worker' });
+      await this.api.createAgent({ name: this.draft.name.trim(), provider: this.draft.provider, model: this.draft.model.trim(), role: 'worker' });
       this.adding.set(false);
       await this.live.refresh();
       this.toasts.ok(`${this.draft.name.trim()} added.`);
@@ -140,7 +180,7 @@ export class AgentsPage {
 
   async save(a: Agent): Promise<void> {
     await this.run(async () => {
-      await this.api.updateAgent(a.id, { name: this.edit.name.trim(), model: this.edit.model.trim() });
+      await this.api.updateAgent(a.id, { name: this.edit.name.trim(), provider: this.edit.provider, model: this.edit.model.trim() });
       this.editing.set('');
       await this.live.refresh();
       this.toasts.ok('Worker saved.');

@@ -3,6 +3,8 @@ import { FormsModule } from '@angular/forms';
 import { ActivatedRoute, Router } from '@angular/router';
 import { Api } from '../api';
 import type { SecretInfo } from '../models';
+import { AiProviders, providerStatus } from '../components/ai-providers';
+import type { ProvidersInfo } from '../models';
 import { Icon } from '../ui/icon';
 import { Toasts } from '../ui/toast';
 
@@ -33,16 +35,9 @@ const MODELS = ['claude-opus-5-5', 'claude-sonnet-5-5', 'claude-haiku-4-5-202510
 
 const STEPS: Step[] = [
   {
-    id: 'ai', title: 'AI and models', icon: 'sparkles',
-    blurb: 'Agents run on Claude. Use an Anthropic API key, or leave it empty to use the Claude Code login on this machine. Pick the model each kind of agent uses.',
-    secrets: ['ANTHROPIC_API_KEY'],
-    fields: [
-      { key: 'model.worker', label: 'Worker model', hint: 'Writes the code for each ticket.', type: 'text' },
-      { key: 'model.reviewer', label: 'Reviewer model', hint: 'Reviews each change before it waits for you.', type: 'text' },
-      { key: 'model.planner', label: 'Planner model', hint: 'Turns requirements into a backlog.', type: 'text' },
-      { key: 'model.assistant', label: 'Chat model', hint: 'Answers your questions on the Dashboard.', type: 'text' },
-    ],
-    tests: [{ provider: 'anthropic', label: 'Test API key', needs: ['ANTHROPIC_API_KEY'] }],
+    id: 'ai', title: 'AI providers', icon: 'sparkles',
+    blurb: 'Choose the AI that does the work: Claude, local models (Ollama, LM Studio, vLLM), an OpenAI-compatible service, or a coding CLI such as GitHub Copilot CLI. Then pick the provider and model for each role.',
+    secrets: [], fields: [], tests: [],
   },
   {
     id: 'code', title: 'Code hosts', icon: 'pr',
@@ -88,7 +83,7 @@ const STEPS: Step[] = [
 /** Settings as a guided set of steps you can also jump between freely. */
 @Component({
   selector: 'app-settings',
-  imports: [FormsModule, Icon],
+  imports: [FormsModule, Icon, AiProviders],
   template: `
     <header class="page-head">
       <div>
@@ -111,6 +106,7 @@ const STEPS: Step[] = [
             <div class="step-body" [id]="'step-' + s.id" role="region" [attr.aria-label]="s.title">
               <h2><app-icon [name]="s.icon" /> {{ s.title }}</h2>
               <p class="hint">{{ s.blurb }}</p>
+              @if (s.id === 'ai') { <app-ai-providers (changed)="providers.set($event)" /> }
               @if (s.secrets.length) {
                 @if (backend() === 'keychain') {
                   <p class="note-box"><app-icon name="key" [size]="16" /> Keys are stored in your system keychain and never shown again.</p>
@@ -207,6 +203,7 @@ export class SettingsPage {
   readonly loadError = signal('');
   readonly results = signal<Record<string, { ok: boolean; message: string }>>({});
   readonly saved = signal<Record<string, string>>({});
+  readonly providers = signal<ProvidersInfo | null>(null);
   settings: Record<string, string> = {};
   values: Record<string, string> = {};
 
@@ -218,6 +215,17 @@ export class SettingsPage {
 
   constructor() {
     void this.load();
+    void this.api.providers().then((p) => this.providers.set(p), () => undefined);
+  }
+
+  /** Whether every role's provider can run now. */
+  private aiReady(): boolean | null {
+    const i = this.providers();
+    if (!i) return null;
+    return Object.values(i.roles).every((c) => {
+      const p = i.providers.find((x) => x.id === c.provider);
+      return !!p && providerStatus(p).ok;
+    });
   }
 
   async load(): Promise<void> {
@@ -256,7 +264,7 @@ export class SettingsPage {
 
   status(id: StepId): Status {
     switch (id) {
-      case 'ai': return this.isSet('ANTHROPIC_API_KEY') ? 'done' : 'optional';
+      case 'ai': return this.aiReady() === false ? 'todo' : 'done';
       case 'code': return ['GITHUB_TOKEN', 'GITLAB_TOKEN', 'BITBUCKET_APP_PASSWORD'].some((n) => this.isSet(n)) ? 'done' : 'todo';
       case 'pm': return ['JIRA_API_TOKEN', 'TRELLO_TOKEN'].some((n) => this.isSet(n)) ? 'done' : 'optional';
       case 'design': return this.isSet('FIGMA_TOKEN') ? 'done' : 'optional';
@@ -268,7 +276,12 @@ export class SettingsPage {
   statusText(id: StepId): string {
     const s = this.status(id);
     switch (id) {
-      case 'ai': return s === 'done' ? 'API key saved' : 'Uses your Claude Code login';
+      case 'ai': {
+        const i = this.providers();
+        if (!i) return 'Loading…';
+        const used = [...new Set(Object.values(i.roles).map((c) => i.providers.find((p) => p.id === c.provider)?.name ?? c.provider))];
+        return s === 'done' ? used.join(' · ') : `${used.join(' · ')}: needs attention`;
+      }
       case 'code': return s === 'done' ? `${['GITHUB_TOKEN', 'GITLAB_TOKEN', 'BITBUCKET_APP_PASSWORD'].filter((n) => this.isSet(n)).length} connected` : 'Needed for GitHub, GitLab or Bitbucket';
       case 'pm': return s === 'done' ? 'Connected' : 'Optional';
       case 'design': return s === 'done' ? 'Figma connected' : 'Optional';

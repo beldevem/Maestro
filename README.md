@@ -11,7 +11,11 @@ It covers the whole plan: the board and worker agents, the planner and auto-assi
 - **Tickets** live in the project's PM tool: Jira, Trello, or Maestro itself when you have no PM tool. You can create tickets from the board.
 - **Workflow config** per project (YAML): base branch, branch naming, commit convention, Definition of Ready, quality gates, fix attempts and Definition of Done.
 - **Docker sandbox for quality gates** (optional, off by default): with `sandbox.type: docker` in the workflow, each gate runs in a throwaway container from `sandbox.image`, with the worktree mounted, your user id, and optionally no network.
-- **Worker agents** run on the Claude Agent SDK. Each ticket gets its own git worktree. When you assign a ticket, the worker:
+- **Any AI, per role** (Settings → AI providers): workers, the reviewer, the planner and the chat each use a provider and model you choose, with overrides per project and per worker. Providers:
+  - **Claude**, through the Claude Agent SDK, with an Anthropic API key or the Claude Code login on the machine.
+  - **Any OpenAI-compatible API**: local models with Ollama, LM Studio, vLLM or a llama.cpp server, or services such as OpenAI, OpenRouter, GitHub Models, Groq or Mistral. Maestro runs its own agent loop for these: file tools confined to the worktree, commands limited to the same allowlist, turn and budget limits, cost from token usage (price per million tokens, 0 for local), resumable sessions for fix rounds, and JSON answers for the reviewer, planner and chat.
+  - **A coding CLI** run non-interactively in the worktree: presets for GitHub Copilot CLI, OpenAI Codex CLI, Gemini CLI, Aider and OpenCode, or any command. The CLI applies its own permissions; Maestro still runs the gates, commits, reviews and budgets around it. CLIs report no cost.
+- **Worker agents**: each ticket gets its own git worktree. When you assign a ticket, the worker:
   1. checks the Definition of Ready, then creates a branch from the latest base branch;
   2. implements the ticket;
   3. runs the quality gates, and if one fails, tries to fix it, up to `max_fix_attempts` times;
@@ -40,6 +44,9 @@ It covers the whole plan: the board and worker agents, the planner and auto-assi
 
 ## Known limits
 
+- Coding CLIs (Copilot CLI, Codex, Gemini CLI, Aider, OpenCode) are not in the Docker image; install them where the engine runs, and check the preset's flags against your version's `--help`. Their cost is not tracked, and they don't resume sessions between fix rounds.
+- Local models need tool calling for workers (most current coding models have it) and do better with a larger context than Ollama's default; small models may need more fix attempts.
+
 - Dependencies live in Maestro's database and are written into the ticket text ("Depends on: KEY"). On Jira they are also added as "Blocks" links; Trello has no links.
 - Pull requests are polled every minute (there are no webhooks on a local machine), so a merge or a comment shows up within about a minute.
 - GitLab and Bitbucket are tested against their API shapes, not yet against live accounts.
@@ -50,7 +57,7 @@ It covers the whole plan: the board and worker agents, the planner and auto-assi
 
 - Node.js 22.22.3 or newer (Angular 22 needs it; Node 24 LTS works).
 - git.
-- Either an Anthropic API key (added in Settings) or Claude Code signed in on this machine.
+- An AI provider: an Anthropic API key or the Claude Code login, a local model server (Ollama, LM Studio...), an API key for an OpenAI-compatible service, or an installed coding CLI.
 - For GitHub projects: a fine-grained token with **Contents** and **Pull requests** read and write access to the repo.
 - For GitLab projects: a personal or project access token with the `api` and `write_repository` scopes.
 - For Bitbucket projects: your username and an app password with **Repositories** and **Pull requests** read and write.
@@ -90,6 +97,7 @@ docker compose down       # stop (data stays)
 
 - **Data**: the folder in `MAESTRO_DATA` (by default you'd use `~/.maestro`), mounted at the same path as on the host. It holds the database, clones, worktrees and `secrets.json`; folders are 700 and files 600. Don't run the engine on the host at the same time with the same folder.
 - **Local-folder projects**: `PROJECTS_DIR` is mounted at the same path as on the host, so projects under it work as they do outside Docker. Folders elsewhere aren't visible to the container.
+- **Local models**: Ollama and LM Studio listen on 127.0.0.1 by default, which a container can't reach. Either add `-f docker-compose.local-ai.yml` (host networking; Maestro then binds 127.0.0.1 itself) and use `http://localhost:11434/v1`, or make the server listen on all interfaces (`OLLAMA_HOST=0.0.0.0`) and use `http://host.docker.internal:11434/v1`.
 - **Claude**: set `ANTHROPIC_API_KEY` in `.env` (simplest), or share your Claude Code login: mount `~/.claude` at the same path and set `CLAUDE_CONFIG_DIR` to it (see the comment in `docker-compose.yml`; a git-ignored `docker-compose.override.yml` is a good place). The container then uses the same login file as your machine, so token refreshes stay in step. Don't copy the credentials file: a copy goes stale, and refreshing it signs the other copy out.
 - **Secrets**: there is no system keychain in a container, so keys saved in Settings go to `$MAESTRO_DATA/secrets.json` (mode 600). Keys saved in a keychain by an engine on the host aren't visible to the container. Tokens can also come from `.env`.
 - **Files you own**: the container runs as `MAESTRO_UID:MAESTRO_GID`, so commits, worktrees and files in your repositories are yours. `GIT_AUTHOR_NAME` and `GIT_AUTHOR_EMAIL` set who Maestro's commits are from.
@@ -107,7 +115,7 @@ docker compose down       # stop (data stays)
 ## Layout
 
 ```
-apps/engine      Node + TypeScript engine (Fastify, SQLite via node:sqlite, Claude Agent SDK)
+apps/engine      Node + TypeScript engine (Fastify, SQLite via node:sqlite, Claude Agent SDK and its own agent loop)
   src/adapters/codehost   GitHub, GitLab, Bitbucket, local folder
   src/adapters/pm         Jira, Trello, manual
   src/adapters/design     Figma
