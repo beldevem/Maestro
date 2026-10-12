@@ -30,6 +30,8 @@ services:
       - ${MAESTRO_DATA}:${MAESTRO_DATA}
       # Local-folder projects: your repositories at the same path as on the host.
       - ${PROJECTS_DIR:?set PROJECTS_DIR in .env}:${PROJECTS_DIR}
-      # Optional: use your Claude Code login instead of an API key. Mounted read-only and copied into the
-      # private config folder at start (a refreshed token stays in the container's copy, not in yours).
-      # - ${HOME}/.claude/.credentials.json:/run/claude-login/.credentials.json:ro
+      # Optional: use your Claude Code login instead of an API key. Share your ~/.claude folder at the same
+      # path and point CLAUDE_CONFIG_DIR at it (in environment: above), so the container and your machine use
+      # one login: a token refreshed by either is seen by both. A copy would go stale and its refresh would
+      # sign the other one out.
+      # - ${HOME}/.claude:${HOME}/.claude
