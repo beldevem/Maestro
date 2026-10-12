@@ -6,7 +6,17 @@ import type { SecretStore } from '../secrets.js';
 import type { Project, Ticket } from '../types.js';
 import type { CodingAgent } from './coding-agent.js';
 import { projectKnowledge } from './prompts.js';
-import { chooseModel } from './providers/config.js';
+import { chooseModel, getProvider, type Choice } from './providers/config.js';
+
+/** "Ollama (local) · qwen3-coder:30b" */
+export function modelLabel(store: Store, c: Choice): string {
+  return `${getProvider(store, c.provider)?.name ?? c.provider}${c.model ? ` · ${c.model}` : ''}`;
+}
+
+/** Tells the assistant which AI it is, so "which model am I talking to?" gets a true answer. */
+function runsOn(store: Store, c: Choice): string {
+  return `You run on ${getProvider(store, c.provider)?.name ?? c.provider}${c.model ? `, model ${c.model}` : ''}; say so if asked which AI or model you are.`;
+}
 
 export interface ChatTurn {
   role: 'user' | 'assistant';
@@ -100,7 +110,8 @@ export async function askAssistant(
 ): Promise<{ answer: string; costUsd: number; actions: ProposedAction[] }> {
   const runs = deps.store.listRuns(project.id).slice(0, 15);
   const agents = deps.store.listAgents();
-  const system = `You are Maestro's assistant for one project. Answer briefly and concretely from the material below and, when useful, by reading the repository (read-only).
+  const choice = chooseModel(deps.store, 'assistant', { projectId: project.id });
+  const system = `You are Maestro's assistant for one project. ${runsOn(deps.store, choice)} Answer briefly and concretely from the material below and, when useful, by reading the repository (read-only).
 
 ${projectKnowledge(project)}
 
@@ -130,7 +141,7 @@ Return your reply in the requested structured format.`;
     cwd: cwd && existsSync(cwd) ? cwd : tmpdir(),
     prompt: transcript ? `${transcript}\n\nUser: ${message}` : message,
     systemPrompt: system,
-    ...chooseModel(deps.store, 'assistant', { projectId: project.id }),
+    ...choice,
     allowedTools: ['Read', 'Glob', 'Grep'],
     maxTurns: 15,
     outputSchema: CHAT_JSON_SCHEMA,
@@ -159,7 +170,8 @@ export async function askGlobalAssistant(
   cwd: string,
   history: ChatTurn[],
   message: string,
-): Promise<{ answer: string; costUsd: number; actions: ProposedAction[] }> {
+  override?: Choice,
+): Promise<{ answer: string; costUsd: number; actions: ProposedAction[]; model: string }> {
   const agents = deps.store.listAgents();
   const runs = deps.store.listRuns().slice(0, 40);
   const projectName = new Map(digests.map((d) => [d.project.id, d.project.name]));
@@ -172,7 +184,8 @@ export async function askGlobalAssistant(
     })
     .join('\n\n');
   const focus = scope ? projectKnowledge(scope) : '';
-  const system = `You are Maestro's assistant. Maestro hands tickets to coding agents across several projects. Answer briefly and concretely about any project, ticket, pull request or run from the material below${scope ? ' and, when useful, by reading the focused project\'s repository (read-only)' : ''}.
+  const choice = override?.provider ? override : chooseModel(deps.store, 'assistant', { projectId: scope?.id });
+  const system = `You are Maestro's assistant. ${runsOn(deps.store, choice)} Maestro hands tickets to coding agents across several projects. Answer briefly and concretely about any project, ticket, pull request or run from the material below${scope ? ' and, when useful, by reading the focused project\'s repository (read-only)' : ''}.
 Refer to tickets by key and runs by ticket key; say which project something belongs to.
 ${focus ? `\n## Project in focus\n${focus}\n` : ''}
 ## Projects
@@ -201,7 +214,7 @@ Return your reply in the requested structured format.`;
     cwd: cwd && existsSync(cwd) ? cwd : tmpdir(),
     prompt: transcript ? `${transcript}\n\nUser: ${message}` : message,
     systemPrompt: system,
-    ...chooseModel(deps.store, 'assistant', { projectId: scope?.id }),
+    ...choice,
     allowedTools: scope ? ['Read', 'Glob', 'Grep'] : [],
     maxTurns: 15,
     outputSchema: CHAT_JSON_SCHEMA,
@@ -214,5 +227,5 @@ Return your reply in the requested structured format.`;
   const scoped = scope
     ? actions.map((a): ProposedAction => (a.type === 'pause_agent' || a.type === 'resume_agent' || a.project ? a : { ...a, project: scope.name }))
     : actions;
-  return { answer: data && typeof data.answer === 'string' ? data.answer : out.text, costUsd: out.costUsd, actions: scoped };
+  return { answer: data && typeof data.answer === 'string' ? data.answer : out.text, costUsd: out.costUsd, actions: scoped, model: modelLabel(deps.store, choice) };
 }

@@ -89,6 +89,38 @@ describe('chat across projects', () => {
     await app.close();
   });
 
+  it('uses the model chosen for the conversation and labels each answer with it', async () => {
+    const agent = new FakeAssistant({ text: 'ok' });
+    const { app, store } = await setup(agent);
+    store.setSetting('providers', JSON.stringify([
+      { id: 'claude', name: 'Claude', kind: 'claude', baseUrl: '', apiKeySecret: 'ANTHROPIC_API_KEY', structuredOutput: 'json_schema', prices: {} },
+      { id: 'ollama', name: 'Ollama (local)', kind: 'openai', baseUrl: 'http://127.0.0.1:9/v1', apiKeySecret: '', structuredOutput: 'json_schema', prices: {} },
+    ]));
+    store.setSetting('provider.assistant', 'ollama');
+    store.setSetting('model.assistant', 'qwen3-coder:30b');
+    const first = (await app.inject({ method: 'POST', url: '/api/chat', payload: { message: 'hi' } })).json();
+    expect(agent.tasks[0]).toMatchObject({ provider: 'ollama', model: 'qwen3-coder:30b' });
+    expect(agent.tasks[0].systemPrompt).toContain('You run on Ollama (local), model qwen3-coder:30b');
+    expect(first.model).toBe('Ollama (local) · qwen3-coder:30b');
+
+    expect((await app.inject({ method: 'PUT', url: '/api/chat/model', payload: { provider: 'ghost', model: 'x' } })).statusCode).toBe(400);
+    await app.inject({ method: 'PUT', url: '/api/chat/model', payload: { provider: 'ollama', model: 'gpt-oss:20b' } });
+    await app.inject({ method: 'POST', url: '/api/chat', payload: { message: 'and now?' } });
+    expect(agent.tasks[1]).toMatchObject({ provider: 'ollama', model: 'gpt-oss:20b' });
+    const history = (await app.inject({ method: 'GET', url: '/api/chat' })).json();
+    expect(history.filter((m: { role: string }) => m.role === 'assistant').map((m: { model: string }) => m.model)).toEqual(['Ollama (local) · qwen3-coder:30b', 'Ollama (local) · gpt-oss:20b']);
+
+    const models = (await app.inject({ method: 'GET', url: '/api/chat/models' })).json();
+    expect(models.current).toEqual({ provider: 'ollama', model: 'gpt-oss:20b' });
+    expect(models.default).toEqual({ provider: 'ollama', model: 'qwen3-coder:30b' });
+    expect(models.groups.find((g: { provider: string }) => g.provider === 'claude').models).toContain('claude-opus-5-5');
+    expect(models.groups.find((g: { provider: string }) => g.provider === 'ollama').error).toMatch(/Ollama \(local\) is unreachable .* Is it running\?/);
+
+    await app.inject({ method: 'DELETE', url: '/api/chat' });
+    expect((await app.inject({ method: 'GET', url: '/api/chat/models' })).json().current).toBeNull();
+    await app.close();
+  });
+
   it('fills in the project in focus for ticket actions', async () => {
     const agent = new FakeAssistant({ structured: { answer: 'ok', actions: [{ type: 'plan_backlog' }] } });
     const { app, shop } = await setup(agent);

@@ -169,6 +169,21 @@ export const ROLE_LABEL: Record<Role, { label: string; hint: string }> = {
   assistant: { label: 'Chat', hint: 'Answers your questions on the Dashboard.' },
 };
 
+export interface ChatModelGroup {
+  provider: string;
+  name: string;
+  kind: ProviderKind;
+  models: string[];
+  hint: string;
+  error: string;
+}
+
+export interface ChatModels {
+  groups: ChatModelGroup[];
+  current: Choice | null;
+  default: Choice;
+}
+
 export interface RunBrief {
   runId: string;
   projectId: string;
@@ -278,6 +293,8 @@ export interface ChatMessage {
   id?: number;
   role: 'user' | 'assistant';
   content: string;
+  /** Which AI answered. */
+  model?: string | null;
   createdAt?: string;
   actions?: ChatAction[];
 }

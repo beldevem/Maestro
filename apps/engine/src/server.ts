@@ -479,7 +479,46 @@ export async function buildServer(d: ServerDeps): Promise<FastifyInstance> {
   app.get('/api/chat', async () => d.store.listChat(GLOBAL));
   app.delete('/api/chat', async () => {
     d.store.clearChat(GLOBAL);
+    d.store.deleteSetting('chat.model');
     return { ok: true };
+  });
+  /** The model this conversation uses, chosen in the chat; the Chat role's assignment when none was chosen. */
+  const chatChoice = () => {
+    try {
+      const c = JSON.parse(d.store.getSetting('chat.model') ?? 'null') as { provider: string; model: string } | null;
+      return c?.provider && getProvider(d.store, c.provider) ? c : null;
+    } catch {
+      return null;
+    }
+  };
+  app.get('/api/chat/models', async () => {
+    const groups = await Promise.all(
+      listProviders(d.store).map(async (p) => {
+        const hint = p.kind === 'cli' ? 'Slow for chat, and it may not follow the answer format.' : p.kind === 'openai' && p.structuredOutput === 'prompt' ? 'No JSON mode: answers may come out malformed.' : '';
+        if (p.kind === 'claude') return { provider: p.id, name: p.name, kind: p.kind, models: CLAUDE_MODELS, hint, error: '' };
+        if (p.kind === 'cli') return { provider: p.id, name: p.name, kind: p.kind, models: [''], hint, error: cliInstalled(p.cli?.command ?? '') ? '' : `${p.cli?.command} is not installed.` };
+        try {
+          const models = await Promise.race([
+            listModels(p, p.apiKeySecret ? d.secrets.get(p.apiKeySecret) : undefined),
+            new Promise<never>((_, reject) => setTimeout(() => reject(new Error('no answer within 5 seconds')), 5000)),
+          ]);
+          return { provider: p.id, name: p.name, kind: p.kind, models, hint, error: '' };
+        } catch (e) {
+          return { provider: p.id, name: p.name, kind: p.kind, models: [], hint, error: `${p.name} is unreachable (${(e as Error).message}). Is it running?` };
+        }
+      }),
+    );
+    return { groups, current: chatChoice(), default: chooseModel(d.store, 'assistant') };
+  });
+  app.put('/api/chat/model', async (req) => {
+    const body = z.object({ provider: z.string(), model: z.string().default('') }).nullable().parse(req.body ?? null);
+    if (!body || !body.provider) {
+      d.store.deleteSetting('chat.model');
+      return { current: null };
+    }
+    if (!getProvider(d.store, body.provider)) throw new Error(`No AI provider called "${body.provider}".`);
+    d.store.setSetting('chat.model', JSON.stringify(body));
+    return { current: body };
   });
   app.post('/api/chat', async (req) => {
     const { message, projectId } = z.object({ message: z.string().min(1), projectId: z.string().optional() }).parse(req.body);
@@ -488,10 +527,10 @@ export async function buildServer(d: ServerDeps): Promise<FastifyInstance> {
     const digests = await Promise.all(
       d.store.listProjects().map(async (p) => ({ project: p, tickets: await pmFor(p, d.store, d.secrets).listTickets().catch(() => []) })),
     );
-    const reply = await askGlobalAssistant(d, digests, scope, scope ? repoDir(scope) : '', history, message);
+    const reply = await askGlobalAssistant(d, digests, scope, scope ? repoDir(scope) : '', history, message, chatChoice() ?? undefined);
     if (scope) d.store.addSpend(scope.id, null, 'chat', reply.costUsd);
     d.store.addChatMessage(GLOBAL, 'user', message);
-    const answer = d.store.addChatMessage(GLOBAL, 'assistant', reply.answer);
+    const answer = d.store.addChatMessage(GLOBAL, 'assistant', reply.answer, reply.model);
     answer.actions = reply.actions.map((action) => d.store.addChatAction(GLOBAL, answer.id, { type: action.type, summary: describeAction(action), action }));
     return { ...answer, answer: reply.answer, costUsd: reply.costUsd };
   });
@@ -716,7 +755,7 @@ export async function buildServer(d: ServerDeps): Promise<FastifyInstance> {
         'budget.projectDailyUsd': '0',
         'worktrees.keepDays': '3',
         // Per-project values (auto-assign toggle, pending memory) have their own endpoints.
-        ...Object.fromEntries(Object.entries(d.store.allSettings()).filter(([k]) => !/^(autoAssign|memory|budget\.daily|roles)\./.test(k) && k !== 'providers')),
+        ...Object.fromEntries(Object.entries(d.store.allSettings()).filter(([k]) => !/^(autoAssign|memory|budget\.daily|roles)\./.test(k) && !['providers', 'chat.model'].includes(k))),
       },
       secrets: KNOWN_SECRETS.map((s) => ({ ...s, set: set.has(s.name) || !!process.env[s.name] })),
       secretsBackend: d.secrets.kind,

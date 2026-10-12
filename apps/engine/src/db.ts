@@ -68,6 +68,7 @@ CREATE TABLE IF NOT EXISTS ticket_deps (
 /** Columns added after the first release, for databases created before them. */
 const COLUMNS: { table: string; column: string; ddl: string }[] = [
   { table: 'projects', column: 'docs', ddl: `ALTER TABLE projects ADD COLUMN docs TEXT NOT NULL DEFAULT '{"provider":"none","settings":{}}'` },
+  { table: 'chat_messages', column: 'model', ddl: 'ALTER TABLE chat_messages ADD COLUMN model TEXT' },
   { table: 'agents', column: 'provider', ddl: "ALTER TABLE agents ADD COLUMN provider TEXT NOT NULL DEFAULT ''" },
   { table: 'runs', column: 'area', ddl: 'ALTER TABLE runs ADD COLUMN area TEXT' },
   { table: 'runs', column: 'session_id', ddl: 'ALTER TABLE runs ADD COLUMN session_id TEXT' },
@@ -328,10 +329,10 @@ export class Store {
   }
 
   // Chat with the project's assistant, kept so the conversation and proposed actions survive reloads
-  addChatMessage(projectId: string, role: ChatMessage['role'], content: string): ChatMessage {
+  addChatMessage(projectId: string, role: ChatMessage['role'], content: string, model: string | null = null): ChatMessage {
     const createdAt = now();
-    const res = this.db.prepare('INSERT INTO chat_messages (project_id, role, content, created_at) VALUES (?, ?, ?, ?)').run(projectId, role, content, createdAt);
-    return { id: Number(res.lastInsertRowid), role, content, createdAt, actions: [] };
+    const res = this.db.prepare('INSERT INTO chat_messages (project_id, role, content, model, created_at) VALUES (?, ?, ?, ?, ?)').run(projectId, role, content, model, createdAt);
+    return { id: Number(res.lastInsertRowid), role, content, model, createdAt, actions: [] };
   }
   addChatAction(projectId: string, messageId: number, a: { type: string; summary: string; action: unknown }): StoredChatAction {
     const x: StoredChatAction = { id: randomUUID(), type: a.type, summary: a.summary, action: a.action, state: 'pending', result: null, runId: null, createdAt: now() };
@@ -354,7 +355,7 @@ export class Store {
   listChat(projectId: string, limit = 100): ChatMessage[] {
     const rows = (this.db.prepare('SELECT * FROM chat_messages WHERE project_id = ? ORDER BY id DESC LIMIT ?').all(projectId, limit) as Row[]).reverse();
     const actions = this.db.prepare('SELECT * FROM chat_actions WHERE message_id = ? ORDER BY rowid');
-    return rows.map((r) => ({ id: r.id, role: r.role, content: r.content, createdAt: r.created_at, actions: (actions.all(r.id) as Row[]).map(toChatAction) }));
+    return rows.map((r) => ({ id: r.id, role: r.role, content: r.content, model: r.model ?? null, createdAt: r.created_at, actions: (actions.all(r.id) as Row[]).map(toChatAction) }));
   }
   clearChat(projectId: string): void {
     this.db.prepare('DELETE FROM chat_actions WHERE project_id = ?').run(projectId);

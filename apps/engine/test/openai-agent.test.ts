@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import type { ProviderConfig } from '../src/agents/providers/config.js';
-import { extractJson, listModels, OpenAICompatibleAgent } from '../src/agents/providers/openai.js';
+import { describeSchema, exampleFor, extractJson, listModels, matchesSchema, OpenAICompatibleAgent, withoutJson } from '../src/agents/providers/openai.js';
 import { checkCommand, globToRegex } from '../src/agents/providers/tools.js';
 
 const cfg = (over: Partial<ProviderConfig> = {}): ProviderConfig => ({
@@ -110,13 +110,15 @@ describe('OpenAI-compatible agent loop', () => {
     const direct = scripted([{ content: 'Here you go:\n```json\n{"verdict":"approve"}\n```' }]);
     const a = await new OpenAICompatibleAgent(cfg(), undefined, sessions, direct.impl).run({ cwd: repo, prompt: 'p', systemPrompt: 's', model: 'm', allowedTools: [], outputSchema: schema });
     expect(a.structured).toEqual({ verdict: 'approve' });
-    expect(direct.bodies[0].messages[0].content).toContain('reply with ONLY a JSON object');
+    expect(direct.bodies[0].messages[0].content).toContain('reply with ONLY one JSON object');
+    expect(direct.bodies[0].messages[0].content).not.toContain('"properties"');
+    expect(direct.bodies[0].response_format).toEqual({ type: 'json_schema', json_schema: { name: 'answer', strict: true, schema } });
     expect(direct.bodies[0].tools).toBeUndefined();
 
     const retry = scripted([{ content: 'Looks good to me.' }, { content: '{"verdict":"changes_requested"}' }]);
     const b = await new OpenAICompatibleAgent(cfg(), undefined, sessions, retry.impl).run({ cwd: repo, prompt: 'p', systemPrompt: 's', model: 'm', allowedTools: [], outputSchema: schema });
     expect(b.structured).toEqual({ verdict: 'changes_requested' });
-    expect(retry.bodies[1].response_format).toEqual({ type: 'json_schema', json_schema: { name: 'answer', schema } });
+    expect(retry.bodies[1].response_format).toEqual({ type: 'json_schema', json_schema: { name: 'answer', strict: true, schema } });
 
     const promptOnly = scripted([{ content: 'nope' }, { content: '{"verdict":"approve"}' }]);
     await new OpenAICompatibleAgent(cfg({ structuredOutput: 'prompt' }), undefined, sessions, promptOnly.impl).run({ cwd: repo, prompt: 'p', systemPrompt: 's', model: 'm', allowedTools: [], outputSchema: schema });
@@ -171,5 +173,56 @@ describe('helpers', () => {
   it('lists models from /models', async () => {
     const impl = (async () => new Response(JSON.stringify({ data: [{ id: 'b' }, { id: 'a' }] }), { status: 200 })) as unknown as typeof fetch;
     expect(await listModels(cfg(), undefined, impl)).toEqual(['a', 'b']);
+  });
+});
+
+describe('structured answers from weaker models', () => {
+  const schema = {
+    type: 'object',
+    properties: { answer: { type: 'string', description: 'Your reply' }, actions: { type: 'array', items: { type: 'object', properties: { type: { type: 'string', enum: ['assign', null] } } } } },
+    required: ['answer', 'actions'],
+  };
+  const run = async (replies: Reply[], over: Partial<ProviderConfig> = {}) => {
+    const { repo, sessions } = workspace();
+    const server = scripted(replies);
+    const out = await new OpenAICompatibleAgent(cfg(over), undefined, sessions, server.impl).run({ cwd: repo, prompt: 'p', systemPrompt: 's', model: 'm', allowedTools: [], outputSchema: schema });
+    return { out, server };
+  };
+
+  it('describes the fields in words instead of pasting the schema', async () => {
+    const { server } = await run([{ content: '{"answer":"hi","actions":[]}' }]);
+    const sys = server.bodies[0].messages[0].content as string;
+    expect(sys).toContain('{"answer":"...","actions":[]}');
+    expect(sys).toContain('- answer (string): Your reply');
+    expect(sys).not.toContain('"properties"');
+  });
+
+  it('retries when the model echoes the schema, and accepts the corrected answer', async () => {
+    const echo = `You are talking with Maestro.\n${JSON.stringify(schema)}`;
+    const { out, server } = await run([{ content: echo }, { content: '{"answer":"I run on qwen3-coder.","actions":[]}' }]);
+    expect(out.structured).toEqual({ answer: 'I run on qwen3-coder.', actions: [] });
+    expect(server.bodies).toHaveLength(2);
+    expect(server.bodies[1].messages.at(-1).content).toContain('not the schema');
+  });
+
+  it('accepts prose with JSON and fenced JSON when the shape is right', async () => {
+    expect((await run([{ content: 'Sure! {"answer":"a","actions":[]} hope that helps' }])).out.structured).toEqual({ answer: 'a', actions: [] });
+    expect((await run([{ content: '```json\n{"answer":"b","actions":[]}\n```' }])).out.structured).toEqual({ answer: 'b', actions: [] });
+    expect((await run([{ content: '{"answer":3,"actions":[]}' }, { content: '{"answer":"c","actions":[]}' }])).out.structured).toEqual({ answer: 'c', actions: [] });
+  });
+
+  it('shows only the plain text when the model never gets it right, never the JSON', async () => {
+    const { out } = await run([{ content: `I am Maestro.\n${JSON.stringify(schema)}` }, { content: JSON.stringify(schema) }]);
+    expect(out.structured).toBeUndefined();
+    expect(out.text).toBe('I am Maestro.');
+  });
+
+  it('turns schemas into examples and checks shapes', () => {
+    expect(exampleFor(schema)).toEqual({ answer: '...', actions: [] });
+    expect(matchesSchema({ answer: 'x', actions: [] }, schema)).toBe(true);
+    expect(matchesSchema(schema, schema)).toBe(false);
+    expect(matchesSchema({ answer: 'x' }, schema)).toBe(false);
+    expect(withoutJson('Hi.\n```json\n{"a":1}\n```\nBye {"b":2}')).toBe('Hi.\n\nBye');
+    expect(describeSchema(schema)).toBe('- answer (string): Your reply\n- actions (array)\n  - type (string, one of assign) (optional)');
   });
 });

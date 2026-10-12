@@ -168,6 +168,8 @@ export interface ChatMessage {
   id: number;
   role: 'user' | 'assistant';
   content: string;
+  /** Which AI answered, e.g. "Ollama (local) · qwen3-coder:30b". */
+  model?: string | null;
   createdAt: string;
   actions: StoredChatAction[];
 }

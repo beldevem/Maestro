@@ -24,6 +24,52 @@ const LOOP_RULES = `
 - Run commands only through run_command, one at a time, and only those it allows.
 - When you are done, stop calling tools and reply with your final answer.`;
 
+/** A skeleton of what the schema asks for, e.g. {"answer": "...", "actions": []}, which small models follow better than the schema. */
+export function exampleFor(schema: Record<string, any>): unknown {
+  const t = Array.isArray(schema?.type) ? schema.type.find((x: string) => x !== 'null') : schema?.type;
+  if (schema?.enum) return schema.enum.find((x: unknown) => x !== null);
+  if (t === 'object') return Object.fromEntries((schema.required ?? Object.keys(schema.properties ?? {})).map((k: string) => [k, exampleFor(schema.properties?.[k] ?? {})]));
+  if (t === 'array') return [];
+  if (t === 'integer' || t === 'number') return 0;
+  if (t === 'boolean') return false;
+  return '...';
+}
+
+/** The fields of a JSON schema in plain words, for the prompt (pasting the schema itself makes small models echo it). */
+export function describeSchema(schema: Record<string, any>, indent = ''): string {
+  const props = schema?.properties ?? {};
+  return Object.entries(props)
+    .map(([k, p]: [string, any]) => {
+      const t = (Array.isArray(p.type) ? p.type.filter((x: string) => x !== 'null') : [p.type]).join(' or ') || 'value';
+      const opt = (schema.required ?? []).includes(k) ? '' : ' (optional)';
+      const choices = p.enum ? `, one of ${p.enum.filter((x: unknown) => x !== null).join(', ')}` : '';
+      const desc = p.description ? `: ${p.description}` : '';
+      const items = p.items?.properties ? `\n${describeSchema(p.items, `${indent}  `)}` : '';
+      return `${indent}- ${k} (${t}${choices})${opt}${desc}${items}`;
+    })
+    .join('\n');
+}
+
+/** A reply with any JSON taken out, for showing when the model never produced valid JSON. */
+export function withoutJson(text: string): string {
+  return text.replace(/```(?:json)?[\s\S]*?```/gi, '').replace(/\{[\s\S]*\}/g, '').replace(/\n{3,}/g, '\n\n').trim();
+}
+
+/** Whether a value has the shape the schema asks for at the top level (an object with its required fields). */
+export function matchesSchema(value: unknown, schema: Record<string, any>): boolean {
+  if (schema?.type !== 'object') return value !== undefined;
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const v = value as Record<string, unknown>;
+  return (schema.required ?? []).every((k: string) => {
+    if (!(k in v)) return false;
+    const want = schema.properties?.[k]?.type;
+    const types = Array.isArray(want) ? want : want ? [want] : [];
+    if (!types.length) return true;
+    const got = v[k] === null ? 'null' : Array.isArray(v[k]) ? 'array' : typeof v[k] === 'number' ? (Number.isInteger(v[k]) ? 'integer' : 'number') : typeof v[k];
+    return types.includes(got) || (got === 'integer' && types.includes('number'));
+  });
+}
+
 /** Finds JSON in a reply: the whole text, a ```json block, or the outermost {...}. */
 export function extractJson(text: string): unknown {
   const tries = [text.trim(), /```(?:json)?\s*\n([\s\S]*?)```/i.exec(text)?.[1], text.slice(text.indexOf('{'), text.lastIndexOf('}') + 1)];
@@ -82,7 +128,7 @@ export class OpenAICompatibleAgent implements CodingAgent {
     const allowed = parseAllowed(task.allowedTools);
     const tools = toolDefinitions(allowed);
     const jsonRule = task.outputSchema
-      ? `\n\n## Your final answer\nWhen you are done, reply with ONLY a JSON object (no prose) that matches this JSON schema:\n${JSON.stringify(task.outputSchema)}`
+      ? `\n\n## Your final answer\nWhen you are done, reply with ONLY one JSON object and no other text, shaped like:\n${JSON.stringify(exampleFor(task.outputSchema))}\nIts fields:\n${describeSchema(task.outputSchema)}`
       : '';
     const system: Message = { role: 'system', content: `${task.systemPrompt}${tools.length ? LOOP_RULES : ''}${jsonRule}` };
     history.push({ role: 'user', content: task.prompt });
@@ -93,6 +139,11 @@ export class OpenAICompatibleAgent implements CodingAgent {
       cost += ((u?.prompt_tokens ?? 0) * p.input + (u?.completion_tokens ?? 0) * p.output) / 1_000_000;
     };
     const save = () => writeFileSync(file, JSON.stringify(history));
+    const format = (): Record<string, unknown> =>
+      !task.outputSchema ? {}
+      : this.cfg.structuredOutput === 'json_schema' ? { response_format: { type: 'json_schema', json_schema: { name: 'answer', strict: true, schema: task.outputSchema } } }
+      : this.cfg.structuredOutput === 'json_object' ? { response_format: { type: 'json_object' } }
+      : {};
     const maxTurns = task.maxTurns ?? 80;
     const out = (o: Partial<AgentOutcome>): AgentOutcome => {
       save();
@@ -105,8 +156,9 @@ export class OpenAICompatibleAgent implements CodingAgent {
         if (task.signal?.aborted) return out({ error: 'aborted' });
         if (turn >= maxTurns) return out({ error: 'Agent stopped: error_max_turns' });
         if (task.maxBudgetUsd && cost >= task.maxBudgetUsd) return out({ error: 'Agent stopped: error_max_budget_usd' });
+        // Without tools the answer comes in one go, so JSON mode can be asked for right away.
         const res = await this.complete(
-          { model: task.model, messages: [system, ...history], ...(tools.length ? { tools, tool_choice: 'auto' } : {}) },
+          { model: task.model, messages: [system, ...history], ...(tools.length ? { tools, tool_choice: 'auto' } : format()) },
           task.signal,
         );
         addUsage(res.usage);
@@ -133,20 +185,23 @@ export class OpenAICompatibleAgent implements CodingAgent {
 
       let structured: unknown;
       if (task.outputSchema) {
-        structured = extractJson(text);
+        const found = extractJson(text);
+        structured = matchesSchema(found, task.outputSchema) ? found : undefined;
         if (structured === undefined) {
           // One retry that asks for the JSON alone, with the API's JSON mode where the provider has it.
-          history.push({ role: 'user', content: 'Reply again with ONLY the JSON object that matches the schema, nothing else.' });
-          const format =
-            this.cfg.structuredOutput === 'json_schema' ? { response_format: { type: 'json_schema', json_schema: { name: 'answer', schema: task.outputSchema } } }
-            : this.cfg.structuredOutput === 'json_object' ? { response_format: { type: 'json_object' } }
-            : {};
-          const res = await this.complete({ model: task.model, messages: [system, ...history], ...format }, task.signal);
+          history.push({ role: 'user', content: `Reply again with ONLY the JSON object, shaped like ${JSON.stringify(exampleFor(task.outputSchema))}. No other text, and not the schema.` });
+          const res = await this.complete({ model: task.model, messages: [system, ...history], ...format() }, task.signal);
           addUsage(res.usage);
           const retry = res.choices?.[0]?.message?.content ?? '';
           history.push({ role: 'assistant', content: retry });
-          structured = extractJson(retry);
-          if (structured !== undefined) text = retry;
+          const again = extractJson(retry);
+          if (matchesSchema(again, task.outputSchema)) {
+            structured = again;
+            text = retry;
+          } else {
+            console.error(`${this.cfg.name} (${task.model}) did not return valid JSON after a retry; showing its text only.`);
+            text = withoutJson(text) || withoutJson(retry) || 'The model did not give a usable answer.';
+          }
         }
       }
       save();

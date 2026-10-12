@@ -4,7 +4,8 @@ import { FormsModule } from '@angular/forms';
 import { RouterLink } from '@angular/router';
 import { Api } from '../api';
 import { Live } from '../live';
-import type { ChatAction, ChatMessage, Project, Ticket } from '../models';
+import type { ChatAction, ChatMessage, ChatModels, Project, Ticket } from '../models';
+import { renderMarkdown } from '../ui/markdown';
 import { Icon } from '../ui/icon';
 import { Confirm } from '../ui/confirm';
 import { Toasts } from '../ui/toast';
@@ -44,10 +45,21 @@ const SUGGESTIONS = [
           <option value="">All projects</option>
           @for (p of projects(); track p.id) { <option [value]="p.id">{{ p.name }}</option> }
         </select>
+        <label class="sr-only" for="chat-model">Model</label>
+        <select id="chat-model" class="chat-model" [ngModel]="modelKey()" (ngModelChange)="pickModel($event)" name="model" [title]="modelHint()">
+          <option value="">Default: {{ defaultLabel() }}</option>
+          @for (g of modelGroups(); track g.provider) {
+            <optgroup [label]="g.name + (g.hint ? ' (' + g.hint + ')' : '')">
+              @if (g.error) { <option disabled [value]="g.provider + '::!'">{{ g.error }}</option> }
+              @for (m of g.models; track m) { <option [value]="g.provider + '::' + m">{{ m || 'its default model' }}</option> }
+            </optgroup>
+          }
+        </select>
         <button type="button" class="quiet" (click)="picking.set(!picking())" [attr.aria-expanded]="picking()">
           <app-icon name="link" [size]="16" /> Add context
         </button>
       </div>
+      @if (modelHint()) { <p class="warn chat-warn">{{ modelHint() }}</p> }
 
       @if (picking()) {
         <div class="chat-picker" role="listbox" aria-label="Add a ticket, pull request or run">
@@ -71,8 +83,11 @@ const SUGGESTIONS = [
         }
         @for (m of messages(); track $index) {
           <div class="msg msg-{{ m.role }}">
-            {{ m.content }}
-            @if (m.createdAt) { <time class="msg-time">{{ m.createdAt | date: 'shortTime' }}</time> }
+            @if (m.role === 'assistant') { <div class="md" [innerHTML]="md(m.content)"></div> } @else { {{ m.content }} }
+            <span class="msg-time">
+              @if (m.createdAt) { <time>{{ m.createdAt | date: 'shortTime' }}</time> }
+              @if (m.role === 'assistant' && m.model) { <span class="msg-model">{{ m.model }}</span> }
+            </span>
           </div>
           @for (a of m.actions ?? []; track a.id) {
             <div class="action-card">
@@ -131,10 +146,27 @@ export class ChatPanel {
   readonly picking = signal(false);
   readonly chips = signal<ContextChip[]>([]);
   readonly tickets = signal<Ticket[]>([]);
+  readonly models = signal<ChatModels | null>(null);
+  readonly modelKey = signal('');
+  readonly md = renderMarkdown;
   pickFilter = '';
   text = '';
   private readonly log = viewChild<ElementRef<HTMLElement>>('log');
 
+  readonly modelGroups = computed(() => this.models()?.groups ?? []);
+  readonly defaultLabel = computed(() => {
+    const m = this.models();
+    if (!m) return 'chat model from Settings';
+    return `${this.modelGroups().find((g) => g.provider === m.default.provider)?.name ?? m.default.provider}${m.default.model ? ' · ' + m.default.model : ''}`;
+  });
+  /** A warning about the chosen model's provider, if it is a poor fit for chat or unreachable. */
+  readonly modelHint = computed(() => {
+    const m = this.models();
+    if (!m) return '';
+    const provider = this.modelKey() ? this.modelKey().split('::')[0] : m.default.provider;
+    const g = this.modelGroups().find((x) => x.provider === provider);
+    return g?.error || g?.hint || '';
+  });
   readonly scopeName = computed(() => this.projects().find((p) => p.id === this.scope())?.name ?? '');
   readonly pickOptions = computed((): ContextChip[] => {
     const name = (id: string) => this.projects().find((p) => p.id === id)?.name ?? '';
@@ -162,6 +194,30 @@ export class ChatPanel {
       () => this.loading.set(false),
     );
     effect(() => this.setScope(this.initialScope()));
+    void this.loadModels();
+  }
+
+  async loadModels(): Promise<void> {
+    if (!this.api.chatModels) return;
+    try {
+      const m = await this.api.chatModels();
+      this.models.set(m);
+      this.modelKey.set(m.current ? `${m.current.provider}::${m.current.model}` : '');
+    } catch {
+      // The picker then only offers the default.
+    }
+  }
+
+  async pickModel(key: string): Promise<void> {
+    const [provider, model] = key ? key.split('::') : ['', ''];
+    try {
+      await this.api.setChatModel(provider ? { provider, model } : null);
+      this.modelKey.set(key);
+      const g = this.modelGroups().find((x) => x.provider === provider);
+      this.toasts.info(provider ? `Chat now uses ${g?.name ?? provider}${model ? ' · ' + model : ''}.` : 'Chat uses the default model again.');
+    } catch (e) {
+      this.toasts.error((e as Error).message);
+    }
   }
 
   setScope(id: string): void {
@@ -199,7 +255,7 @@ export class ChatPanel {
     this.scrollDown();
     try {
       const res = await this.api.globalChat(message, this.scope() || undefined);
-      this.messages.update((m) => [...m, { role: 'assistant', content: res.answer, createdAt: res.createdAt, actions: res.actions }]);
+      this.messages.update((m) => [...m, { role: 'assistant', content: res.answer, createdAt: res.createdAt, model: res.model, actions: res.actions }]);
     } catch (e) {
       this.messages.update((m) => [...m, { role: 'assistant', content: `Couldn't answer: ${(e as Error).message}` }]);
     } finally {
