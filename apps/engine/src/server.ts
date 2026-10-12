@@ -25,6 +25,7 @@ import { CLI_PRESETS, cliInstalled } from './agents/providers/cli.js';
 import { chooseModel, getProvider, listProviders, projectRoles, providerSchema, ROLES, saveProviders, type ProviderConfig } from './agents/providers/config.js';
 import { listModels } from './agents/providers/openai.js';
 import { CLAUDE_MODELS, claudeLoginStatus, OPENAI_PRESETS } from './agents/providers/presets.js';
+import { modelProblem } from './agents/providers/validate.js';
 import { run as runProc } from './proc.js';
 import { TEMPLATES, templateById, workflowFor } from './templates.js';
 import { computeMetrics } from './metrics.js';
@@ -389,11 +390,29 @@ export async function buildServer(d: ServerDeps): Promise<FastifyInstance> {
     return { ok: true };
   });
 
+  /** Rejects an unknown provider, or a model the provider doesn't offer. */
+  const checkChoice = async (c: { provider: string; model?: string }) => {
+    const p = getProvider(d.store, c.provider);
+    if (!p) throw new Error(`No AI provider called "${c.provider}".`);
+    const problem = await modelProblem(p, c.model ?? '', () => listModels(p, p.apiKeySecret ? d.secrets.get(p.apiKeySecret) : undefined));
+    if (problem) throw new Error(problem);
+  };
+
   // Agents
   app.get('/api/agents', async () => d.store.listAgents());
-  app.post('/api/agents', async (req) => d.store.createAgent(agentSchema.parse(req.body)));
+  app.post('/api/agents', async (req) => {
+    const body = agentSchema.parse(req.body);
+    await checkChoice({ provider: body.provider || chooseModel(d.store, 'worker').provider, model: body.model });
+    return d.store.createAgent(body);
+  });
   app.patch<{ Params: { id: string } }>('/api/agents/:id', async (req) => {
     const patch = agentSchema.partial().parse(req.body);
+    const before = d.store.getAgent(req.params.id);
+    if (!before) throw Object.assign(new Error('Agent not found.'), { statusCode: 404 });
+    if (patch.provider !== undefined || patch.model !== undefined) {
+      const provider = (patch.provider ?? before.provider) || chooseModel(d.store, 'worker').provider;
+      await checkChoice({ provider, model: patch.model ?? before.model ?? '' });
+    }
     const a = d.store.updateAgent(req.params.id, patch);
     if (a) bus.publish({ type: 'agent', agent: a });
     return a;
@@ -516,7 +535,7 @@ export async function buildServer(d: ServerDeps): Promise<FastifyInstance> {
       d.store.deleteSetting('chat.model');
       return { current: null };
     }
-    if (!getProvider(d.store, body.provider)) throw new Error(`No AI provider called "${body.provider}".`);
+    await checkChoice(body);
     d.store.setSetting('chat.model', JSON.stringify(body));
     return { current: body };
   });
@@ -712,14 +731,12 @@ export async function buildServer(d: ServerDeps): Promise<FastifyInstance> {
     return listModels(p, p.apiKeySecret ? d.secrets.get(p.apiKeySecret) : undefined);
   });
   const choiceSchema = z.object({ provider: z.string().min(1), model: z.string().default('') });
-  const checkChoice = (c: { provider: string }) => {
-    if (!getProvider(d.store, c.provider)) throw new Error(`No AI provider called "${c.provider}".`);
-  };
+
   app.put('/api/roles', async (req) => {
     const body = z.object(Object.fromEntries(ROLES.map((r) => [r, choiceSchema.optional()]))).parse(req.body);
     for (const [role, c] of Object.entries(body)) {
       if (!c) continue;
-      checkChoice(c);
+      await checkChoice(c);
       d.store.setSetting(`provider.${role}`, c.provider);
       d.store.setSetting(`model.${role}`, c.model.trim());
     }
@@ -733,7 +750,7 @@ export async function buildServer(d: ServerDeps): Promise<FastifyInstance> {
     for (const [role, c] of Object.entries(body)) {
       if (c === null) delete current[role as keyof typeof current];
       else if (c) {
-        checkChoice(c);
+        await checkChoice(c);
         current[role as keyof typeof current] = { provider: c.provider, model: c.model.trim() };
       }
     }
