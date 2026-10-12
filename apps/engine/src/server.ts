@@ -9,14 +9,14 @@ import { codeHostFor, missingCredentials } from './adapters/codehost/index.js';
 import { pmFor } from './adapters/pm/index.js';
 import { docPageIds, docsContextFor } from './adapters/docs/index.js';
 import { FigmaClient, fileKeyFrom } from './adapters/design/figma.js';
-import { askAssistant, describeAction, proposedActionSchema, type ProposedAction } from './agents/assistant.js';
+import { askAssistant, askGlobalAssistant, describeAction, proposedActionSchema, type ProposedAction } from './agents/assistant.js';
 import { approveDraft, backlogItemSchema, cleanItems, draftBacklog } from './agents/planner.js';
 import type { CodingAgent } from './agents/coding-agent.js';
 import type { Store } from './db.js';
 import { bus, type BusEvent } from './events.js';
 import { NotReadyError, Orchestrator } from './orchestrator.js';
 import { git } from './proc.js';
-import { budgetState, dailyCap, startOfToday, usd } from './budget.js';
+import { budgetState, dailyCap, perRunCap, startOfToday, usd } from './budget.js';
 import { DESIGN_DIR } from './adapters/design/index.js';
 import { readBaseMemory } from './memory.js';
 import { invalidSetting } from './settings.js';
@@ -46,7 +46,7 @@ const pmSchema = z.object({ provider: z.enum(['manual', 'jira', 'trello']), sett
 const designSchema = z.object({ provider: z.enum(['none', 'figma']), settings: z.record(z.string(), z.string()).default({}) });
 const docsSchema = z.object({ provider: z.enum(['none', 'confluence']), settings: z.record(z.string(), z.string()).default({}) });
 const projectSchema = z.object({
-  name: z.string().min(1),
+  name: z.string().trim().min(1),
   description: z.string().default(''),
   codeHost: codeHostSchema,
   pm: pmSchema.default({ provider: 'manual', settings: {} }),
@@ -67,7 +67,7 @@ const ticketSchema = z.object({
   labels: z.array(z.string()).default([]),
 });
 const agentSchema = z.object({
-  name: z.string().min(1),
+  name: z.string().trim().min(1),
   role: z.enum(['worker', 'orchestrator', 'reviewer', 'planner', 'assistant']).default('worker'),
   model: z.string().default(''),
 });
@@ -167,7 +167,23 @@ export async function buildServer(d: ServerDeps): Promise<FastifyInstance> {
 
   /** Proposed actions can be confirmed for an hour; each runs at most once. */
   const PROPOSAL_TTL_MS = 60 * 60_000;
-  const runAction = async (p: ReturnType<typeof project>, a: ProposedAction): Promise<{ message: string; runId?: string }> => {
+  /** The project an action is for: the chat's own project, else the one the action names (or the only one there is). */
+  const actionProject = (scope: ReturnType<typeof project> | null, a: ProposedAction) => {
+    if (scope) return scope;
+    const all = d.store.listProjects();
+    const name = 'project' in a ? a.project?.trim().toLowerCase() : undefined;
+    const found = name ? all.find((x) => x.name.toLowerCase() === name) : all.length === 1 ? all[0] : undefined;
+    if (!found) throw new Error(name ? `No project called "${'project' in a ? a.project : ''}".` : 'Say which project this is for.');
+    return found;
+  };
+  const runAction = async (scope: ReturnType<typeof project> | null, a: ProposedAction): Promise<{ message: string; runId?: string }> => {
+    if (a.type === 'pause_agent' || a.type === 'resume_agent') {
+      const agent = d.store.listAgents().find((x) => x.name.toLowerCase() === a.agentName.toLowerCase());
+      if (!agent) throw new Error(`No agent called ${a.agentName}.`);
+      agentAction(agent, a.type === 'pause_agent' ? 'pause' : 'resume');
+      return { message: `${agent.name} is ${a.type === 'pause_agent' ? 'paused' : 'available again'}.` };
+    }
+    const p = actionProject(scope, a);
     const pm = pmFor(p, d.store, d.secrets);
     switch (a.type) {
       case 'create_ticket': {
@@ -186,13 +202,6 @@ export async function buildServer(d: ServerDeps): Promise<FastifyInstance> {
       case 'plan_backlog':
         void plan(p).catch((e) => console.error(`Planning from chat failed: ${(e as Error).message}`));
         return { message: 'The planner is working; the draft shows up on the Board when it is done.' };
-      case 'pause_agent':
-      case 'resume_agent': {
-        const agent = d.store.listAgents().find((x) => x.name.toLowerCase() === a.agentName.toLowerCase());
-        if (!agent) throw new Error(`No agent called ${a.agentName}.`);
-        agentAction(agent, a.type === 'pause_agent' ? 'pause' : 'resume');
-        return { message: `${agent.name} is ${a.type === 'pause_agent' ? 'paused' : 'available again'}.` };
-      }
     }
   };
 
@@ -389,7 +398,9 @@ export async function buildServer(d: ServerDeps): Promise<FastifyInstance> {
   });
   app.delete<{ Params: { id: string } }>('/api/agents/:id', async (req) => {
     const a = d.store.getAgent(req.params.id);
-    if (a?.currentRunId && d.orchestrator.isActive(a.currentRunId)) throw new Error('Stop this agent\'s run before removing it.');
+    if (!a) throw Object.assign(new Error('Agent not found.'), { statusCode: 404 });
+    const busy = ['working', 'running_checks', 'addressing_review', 'waiting_review'].includes(a.state) || (a.currentRunId && d.orchestrator.isActive(a.currentRunId));
+    if (busy) throw Object.assign(new Error(`${a.name} is working on a ticket; stop its run before deleting it.`), { statusCode: 409 });
     d.store.deleteAgent(req.params.id);
     return { ok: true };
   });
@@ -454,6 +465,101 @@ export async function buildServer(d: ServerDeps): Promise<FastifyInstance> {
     const stored = d.store.getChatAction(p.id, req.params.actionId);
     if (stored && d.store.claimChatAction(stored.id, 'dismissed')) d.store.finishChatAction(stored.id, 'dismissed', 'Dismissed');
     return { ok: true };
+  });
+
+  // Chat across all projects (stored as the project-less thread); an optional projectId puts one project in focus
+  const GLOBAL = '';
+  app.get('/api/chat', async () => d.store.listChat(GLOBAL));
+  app.delete('/api/chat', async () => {
+    d.store.clearChat(GLOBAL);
+    return { ok: true };
+  });
+  app.post('/api/chat', async (req) => {
+    const { message, projectId } = z.object({ message: z.string().min(1), projectId: z.string().optional() }).parse(req.body);
+    const scope = projectId ? project(projectId) : null;
+    const history = d.store.listChat(GLOBAL, 20).map(({ role, content }) => ({ role, content }));
+    const digests = await Promise.all(
+      d.store.listProjects().map(async (p) => ({ project: p, tickets: await pmFor(p, d.store, d.secrets).listTickets().catch(() => []) })),
+    );
+    const reply = await askGlobalAssistant(d, digests, scope, scope ? repoDir(scope) : '', history, message);
+    if (scope) d.store.addSpend(scope.id, null, 'chat', reply.costUsd);
+    d.store.addChatMessage(GLOBAL, 'user', message);
+    const answer = d.store.addChatMessage(GLOBAL, 'assistant', reply.answer);
+    answer.actions = reply.actions.map((action) => d.store.addChatAction(GLOBAL, answer.id, { type: action.type, summary: describeAction(action), action }));
+    return { ...answer, answer: reply.answer, costUsd: reply.costUsd };
+  });
+  app.post<{ Params: { actionId: string } }>('/api/chat/actions/:actionId', async (req) => {
+    const stored = d.store.getChatAction(GLOBAL, req.params.actionId);
+    const fresh = stored && Date.now() - new Date(stored.createdAt).getTime() < PROPOSAL_TTL_MS;
+    if (!stored || !fresh || !d.store.claimChatAction(stored.id, 'done')) {
+      throw Object.assign(new Error('This proposal has expired or was already used. Ask again.'), { statusCode: 404 });
+    }
+    try {
+      const result = await runAction(null, proposedActionSchema.parse(stored.action));
+      d.store.finishChatAction(stored.id, 'done', result.message, result.runId ?? null);
+      return result;
+    } catch (e) {
+      d.store.finishChatAction(stored.id, 'failed', (e as Error).message);
+      throw e;
+    }
+  });
+  app.delete<{ Params: { actionId: string } }>('/api/chat/actions/:actionId', async (req) => {
+    const stored = d.store.getChatAction(GLOBAL, req.params.actionId);
+    if (stored && d.store.claimChatAction(stored.id, 'dismissed')) d.store.finishChatAction(stored.id, 'dismissed', 'Dismissed');
+    return { ok: true };
+  });
+
+  // Overview for the dashboard home: what is happening, what needs you, what it costs
+  app.get('/api/overview', async () => {
+    const today = startOfToday();
+    const runs = d.store.listRuns();
+    const projects = d.store.listProjects();
+    const names = new Map(projects.map((p) => [p.id, p.name]));
+    const spendToday = d.store.spendByProject(today);
+    const spendWeek = d.store.spendByProject(new Date(Date.now() - 7 * 86_400_000).toISOString());
+    const perProject = await Promise.all(
+      projects.map(async (p) => {
+        const tickets = await Promise.race([
+          pmFor(p, d.store, d.secrets).listTickets(),
+          new Promise<null>((resolve) => setTimeout(() => resolve(null), 5000)),
+        ]).catch(() => null);
+        const counts = { todo: 0, in_progress: 0, in_review: 0, done: 0 };
+        for (const t of tickets ?? []) counts[t.status] += 1;
+        const mine = runs.filter((r) => r.projectId === p.id);
+        return {
+          id: p.id, name: p.name, description: p.description, codeHost: p.codeHost.provider, pm: p.pm.provider,
+          tickets: tickets ? counts : null,
+          running: mine.filter((r) => ['running', 'reviewing'].includes(r.status)).length,
+          inReview: mine.filter((r) => r.status === 'in_review').length,
+          blocked: mine.filter((r) => r.status === 'blocked').length,
+          spendToday: spendToday.get(p.id) ?? 0, dailyCap: dailyCap(d.store, p.id),
+          autoAssign: d.orchestrator.autoAssignEnabled(p),
+        };
+      }),
+    );
+    const brief = (r: (typeof runs)[number]) => ({
+      runId: r.id, projectId: r.projectId, projectName: names.get(r.projectId) ?? 'Removed project', ticketKey: r.ticketKey,
+      ticketTitle: r.ticketTitle, status: r.status, prUrl: r.prUrl, checks: r.checks, error: r.error, costUsd: r.costUsd,
+      since: r.endedAt ?? r.startedAt,
+    });
+    return {
+      projects: perProject,
+      agents: d.store.listAgents(),
+      active: runs.filter((r) => ['running', 'reviewing'].includes(r.status)).map(brief),
+      needsYou: [
+        ...runs.filter((r) => r.status === 'blocked').map((r) => ({ ...brief(r), why: 'blocked' as const })),
+        ...runs.filter((r) => r.status === 'in_review').map((r) => ({ ...brief(r), why: 'review' as const })),
+        ...runs.filter((r) => r.status === 'failed' && (r.endedAt ?? '') >= today).map((r) => ({ ...brief(r), why: 'failed' as const })),
+      ],
+      spend: {
+        today: [...spendToday.values()].reduce((a, b) => a + b, 0),
+        last7Days: [...spendWeek.values()].reduce((a, b) => a + b, 0),
+        perRunCap: perRunCap(d.store),
+        dailyCapDefault: dailyCap(d.store, ''),
+      },
+      alertsUnread: d.store.listAlerts(50).filter((a) => !a.read).length,
+      activity: d.store.recentEvents(15).map((e) => ({ ...e, projectName: names.get(e.projectId) ?? 'Removed project' })),
+    };
   });
 
   // Alerts: blocked, failed, budget reached, ready for review

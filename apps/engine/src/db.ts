@@ -221,6 +221,16 @@ export class Store {
     const res = this.db.prepare('INSERT INTO run_events (run_id, ts, kind, message) VALUES (?, ?, ?, ?)').run(runId, ts, kind, message);
     return { id: Number(res.lastInsertRowid), runId, ts, kind, message };
   }
+  /** Latest notable events across all runs, newest first, with the run's ticket and project. */
+  recentEvents(limit = 20): (RunEvent & { ticketKey: string; projectId: string })[] {
+    const rows = this.db
+      .prepare(
+        `SELECT e.*, r.ticket_key, r.project_id FROM run_events e JOIN runs r ON r.id = e.run_id
+         WHERE e.kind IN ('info', 'error', 'command') ORDER BY e.id DESC LIMIT ?`,
+      )
+      .all(limit) as Row[];
+    return rows.map((e) => ({ id: e.id, runId: e.run_id, ts: e.ts, kind: e.kind, message: e.message, ticketKey: e.ticket_key, projectId: e.project_id }));
+  }
   listEvents(runId: string): RunEvent[] {
     return (this.db.prepare('SELECT * FROM run_events WHERE run_id = ? ORDER BY id').all(runId) as Row[]).map((e) => ({
       id: e.id, runId: e.run_id, ts: e.ts, kind: e.kind, message: e.message,
