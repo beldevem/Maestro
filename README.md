@@ -121,6 +121,18 @@ docker compose down       # stop (data stays)
 - **First run**: Maestro opens a setup page. The account you create there gets the Project Manager and Tech Lead roles and owns everything made before accounts existed.
 - **Login**: email and password. Passwords are hashed with scrypt (at least 12 characters). A session lasts 7 days without use and 30 days at most; the cookie is `HttpOnly`, `SameSite=Strict`, and `Secure` over HTTPS. 5 wrong passwords lock an account for 15 minutes, and each address gets 30 tries per 15 minutes.
 - **Passwords**: change yours from the user menu (your other browsers are logged out). A one-time password must be replaced at the next login.
+- **Roles** (one person can hold several):
+
+  | | Project Manager | Tech Lead | Developer |
+  | --- | --- | --- | --- |
+  | See projects | Their projects | All | Their projects |
+  | Tickets by hand, chat questions | Yes | Yes | Yes |
+  | Start, stop, review runs; the planner | No | Yes | Yes, in their projects |
+  | Merge | No | Yes | No |
+  | Projects, workflows, connectors, providers, settings, workers, budgets | No | Yes | No |
+  | Users, roles, project members | Yes | No | No |
+
+  The engine checks every request against this table; the dashboard also hides what you can't do.
 - **Locked out?** On the machine running Maestro:
 
   ```bash

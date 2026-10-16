@@ -2,7 +2,7 @@
 <div class="shell">
   <aside class="nav" aria-label="Main">
     <div class="brand"><span class="brand-mark" aria-hidden="true">M</span><span class="brand-name">Maestro</span></div>
-    @for (item of nav; track item.path) {
+    @for (item of navItems(); track item.path) {
       <a [routerLink]="item.path" routerLinkActive="active" [routerLinkActiveOptions]="{ exact: item.path === '/' }" [attr.aria-label]="item.label">
         <app-icon [name]="item.icon" />
         <span class="nav-label">{{ item.label }}</span>

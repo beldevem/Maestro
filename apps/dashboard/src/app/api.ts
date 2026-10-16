@@ -1,5 +1,5 @@
 import { Injectable } from '@angular/core';
-import type { SessionUser, Agent, Alert, BacklogDraft, Caps, ChatThread, DirListing, Usage, ChatAction, ChatMessage, ChatModels, Choice, Metrics, Overview, ProviderConfig, ProviderView, ProvidersInfo, Role, ProjectTemplate, ProjectSpend, BacklogItem, Project, PullRequestRow, Review, ReviewComment, Run, RunEvent, SecretInfo, Ticket, TicketStatus } from './models';
+import type { SessionUser, UserRole, Agent, Alert, BacklogDraft, Caps, ChatThread, DirListing, Usage, ChatAction, ChatMessage, ChatModels, Choice, Metrics, Overview, ProviderConfig, ProviderView, ProvidersInfo, Role, ProjectTemplate, ProjectSpend, BacklogItem, Project, PullRequestRow, Review, ReviewComment, Run, RunEvent, SecretInfo, Ticket, TicketStatus } from './models';
 
 export class ApiError extends Error {
   constructor(message: string, readonly status: number, readonly reasons: string[] = [], readonly code?: string) {
@@ -29,6 +29,7 @@ export class Api {
   login = (email: string, password: string) => this.call<{ user: SessionUser }>('POST', '/auth/login', { email, password });
   setup = (account: { email: string; name: string; password: string }) => this.call<{ user: SessionUser }>('POST', '/auth/setup', account);
   logout = () => this.call('POST', '/auth/logout', {});
+  myRights = () => this.call<{ actions: string[]; seesAllProjects: boolean; table: Record<string, UserRole[]> }>('GET', '/me/rights');
   changePassword = (current: string, next: string) => this.call<{ user: SessionUser }>('POST', '/auth/password', { current, next });
 
   projects = () => this.call<Project[]>('GET', '/projects');

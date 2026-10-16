@@ -6,6 +6,7 @@ import { Api } from './api';
 import { ChatPanel } from './components/chat-panel';
 import { Live } from './live';
 import { USER_ROLE_LABEL, type Project, type UserRole } from './models';
+import { Rights } from './rights';
 import { Session } from './session';
 import { ChatDock } from './ui/chat-dock';
 import { ConfirmHost } from './ui/confirm';
@@ -44,6 +45,9 @@ export class App {
   readonly projects = signal<Pick<Project, 'id' | 'name'>[]>([]);
 
   readonly session = inject(Session);
+  readonly rights = inject(Rights);
+  /** Menu items this user can use (Settings is for Tech Leads). */
+  readonly navItems = computed(() => this.nav.filter((i) => i.path !== '/settings' || this.rights.can('settings.manage') || !this.rights.actions().size));
   readonly roleLabel = USER_ROLE_LABEL;
   readonly menuOpen = signal(false);
 
