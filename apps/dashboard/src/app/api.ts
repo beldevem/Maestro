@@ -1,5 +1,5 @@
 import { Injectable } from '@angular/core';
-import type { Agent, Alert, BacklogDraft, Caps, ChatThread, Usage, ChatAction, ChatMessage, ChatModels, Choice, Metrics, Overview, ProviderConfig, ProviderView, ProvidersInfo, Role, ProjectTemplate, ProjectSpend, BacklogItem, Project, PullRequestRow, Review, ReviewComment, Run, RunEvent, SecretInfo, Ticket, TicketStatus } from './models';
+import type { Agent, Alert, BacklogDraft, Caps, ChatThread, DirListing, Usage, ChatAction, ChatMessage, ChatModels, Choice, Metrics, Overview, ProviderConfig, ProviderView, ProvidersInfo, Role, ProjectTemplate, ProjectSpend, BacklogItem, Project, PullRequestRow, Review, ReviewComment, Run, RunEvent, SecretInfo, Ticket, TicketStatus } from './models';
 
 export class ApiError extends Error {
   constructor(message: string, readonly status: number, readonly reasons: string[] = []) {
@@ -97,6 +97,10 @@ export class Api {
   /** null puts a cap back to the default from Settings; a missing one stays as it is. */
   setProjectBudget = (projectId: string, caps: { dailyTokens?: number | null; dailyEur?: number | null }) =>
     this.call<{ dailyCaps: Caps }>('PUT', `/projects/${projectId}/budget`, caps);
+  /** Subfolders for the local-folder picker (never files), inside the folders the engine may browse. */
+  fsDirs = (path?: string, hidden = false) =>
+    this.call<DirListing>('GET', `/fs/dirs?${new URLSearchParams({ ...(path ? { path } : {}), ...(hidden ? { hidden: '1' } : {}) })}`);
+  fsCheck = (path: string) => this.call<{ path: string; isGitRepo: boolean; branch: string | null }>('GET', `/fs/check?${new URLSearchParams({ path })}`);
   currency = () => this.call<{ eurPerUsd: number }>('GET', '/currency');
 
   settings = () => this.call<{ settings: Record<string, string>; secrets: SecretInfo[]; secretsBackend: 'keychain' | 'file' }>('GET', '/settings');

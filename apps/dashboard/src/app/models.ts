@@ -376,3 +376,16 @@ export const STATUS_LABEL: Record<TicketStatus, string> = {
   in_review: 'In review',
   done: 'Done',
 };
+
+/** A folder listing from the engine's folder picker. */
+export interface DirListing {
+  /** '' when listing the roots themselves. */
+  path: string;
+  parent: string | null;
+  roots: string[];
+  crumbs: { name: string; path: string }[];
+  dirs: { name: string; path: string; isGitRepo: boolean; hasPackageJson: boolean; hidden: boolean }[];
+  isGitRepo: boolean;
+  branch: string | null;
+  truncated: boolean;
+}

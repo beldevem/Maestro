@@ -3,6 +3,8 @@
 ## Unreleased (2026-10-12)
 
 ### Added
+- **Browse…** for local-folder projects: a folder picker served by the engine (browsers never reveal a folder's full path) lists subfolders inside the allowed roots (`MAESTRO_BROWSE_ROOTS`, by default the mounted projects folder in Docker or your home folder), marks git repositories, fills the path and default branch, and warns when a folder isn't a git repository or is out of Maestro's sight.
+- The Dashboard chat can be minimized or closed and reopened from any page, and keeps several conversations, each with its own project focus and model.
 - Usage is measured in tokens. Every agent call records input, output and cache tokens; runs, backlog drafts, the spend ledger and metrics carry them, and the dashboard shows tokens with the breakdown on hover and a rough euro estimate in grey ("≈ €0 (local)" for free models). Usage from before this change shows "n/a".
 - A "USD → EUR rate" setting (0.90 by default) for those estimates; no rate is fetched online.
 - Model dropdowns everywhere a model is chosen (AI roles, workers, project overrides, the chat), filled from the provider: Claude's models, an OpenAI-compatible server's `/v1/models`, or a CLI's default. Each has a refresh button, loading and error states with Retry, and "Other model…" to type a name the provider doesn't list.

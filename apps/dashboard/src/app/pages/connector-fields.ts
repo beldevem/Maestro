@@ -1,6 +1,8 @@
-import { Component, input } from '@angular/core';
+import { Component, inject, input, signal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
+import { Api } from '../api';
 import type { Project } from '../models';
+import { FolderPicker, type PickedFolder } from '../ui/folder-picker';
 
 export type ConnectorModel = Pick<Project, 'codeHost' | 'pm' | 'design' | 'docs'>;
 
@@ -16,7 +18,7 @@ export function emptyConnectors(): ConnectorModel {
 /** Code host, PM tool, design tool and docs choices for a project. Edits the model in place. */
 @Component({
   selector: 'app-connector-fields',
-  imports: [FormsModule],
+  imports: [FormsModule, FolderPicker],
   template: `
     @let m = model();
     @if (show('codeHost')) {
@@ -43,7 +45,15 @@ export function emptyConnectors(): ConnectorModel {
         <label>Repository <input [(ngModel)]="m.codeHost.repo" name="ch-repo" placeholder="workspace/repo" required /></label>
         <p class="hint">Add your Bitbucket username and an app password (Repositories and Pull requests, read and write) in Settings.</p>
       } @else {
-        <label>Folder path <input [(ngModel)]="m.codeHost.localPath" name="ch-path" placeholder="/home/you/projects/app" required /></label>
+        <div class="path-row">
+          <label>Folder path <input [(ngModel)]="m.codeHost.localPath" name="ch-path" placeholder="/home/you/projects/app" required spellcheck="false"
+            (blur)="check(m.codeHost.localPath)" [attr.aria-describedby]="folderNote() ? 'ch-path-note' : null" /></label>
+          <button type="button" (click)="browsing.set(true)" aria-haspopup="dialog">Browse…</button>
+        </div>
+        @if (folderNote(); as n) { <p id="ch-path-note" [class]="n.kind" role="status">{{ n.text }}</p> }
+        @if (browsing()) {
+          <app-folder-picker [start]="m.codeHost.localPath ?? ''" (chosen)="picked(m, $event)" (cancel)="browsing.set(false)" />
+        }
       }
       <label>Default branch <input [(ngModel)]="m.codeHost.defaultBranch" name="ch-branch" /></label>
     </fieldset>
@@ -127,6 +137,32 @@ export class ConnectorFields {
   readonly model = input.required<ConnectorModel>();
   /** Show one section only (for the new-project steps); all of them when empty. */
   readonly only = input<'' | 'codeHost' | 'pm' | 'design' | 'docs'>('');
+
+  private readonly api = inject(Api);
+  readonly browsing = signal(false);
+  /** What the engine found at the folder path: not a git repository, or out of its sight. */
+  readonly folderNote = signal<{ kind: 'warn' | 'error'; text: string } | null>(null);
+
+  picked(m: ConnectorModel, f: PickedFolder): void {
+    m.codeHost.localPath = f.path;
+    if (f.branch) m.codeHost.defaultBranch = f.branch;
+    this.browsing.set(false);
+    this.note(f);
+  }
+
+  /** Checks a typed path, so a wrong one shows before the project is saved. */
+  async check(path: string | undefined): Promise<void> {
+    if (!path?.trim()) return this.folderNote.set(null);
+    try {
+      this.note(await this.api.fsCheck(path.trim()));
+    } catch (e) {
+      this.folderNote.set({ kind: 'error', text: (e as Error).message });
+    }
+  }
+
+  private note(f: PickedFolder): void {
+    this.folderNote.set(f.isGitRepo ? null : { kind: 'warn', text: `${f.path} isn't a git repository yet. Run "git init" there and make a first commit before assigning tickets.` });
+  }
 
   show(section: 'codeHost' | 'pm' | 'design' | 'docs'): boolean {
     return !this.only() || this.only() === section;
