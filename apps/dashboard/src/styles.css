@@ -561,3 +561,12 @@ input[aria-invalid='true'] { border-color: var(--bad); }
   .nav .user-chip-text { display: none; }
   .user-pop { position: fixed; top: 56px; right: 8px; left: auto; bottom: auto; max-width: calc(100vw - 16px); }
 }
+.system-check { margin-bottom: 16px; }
+.sc-head { align-items: center; gap: 10px; }
+.sc-head h2 { display: flex; align-items: center; gap: 8px; margin: 0; }
+.sc-head .hint { flex: 1; margin: 0; }
+.sc-list { list-style: none; margin: 8px 0 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.sc-list li { display: flex; flex-direction: column; gap: 2px; padding: 8px 10px; border-radius: var(--radius); border-left: 3px solid var(--border); background: var(--surface-2); }
+.sc-list li.sc-error { border-left-color: var(--bad); }
+.sc-list li.sc-warning { border-left-color: var(--warn); }
+.sc-list li.sc-ok { border-left-color: var(--good); }

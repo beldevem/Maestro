@@ -137,9 +137,10 @@ type Tab = 'board' | 'knowledge' | 'workflow' | 'runs' | 'chat' | 'connectors' |
           <form class="panel" (ngSubmit)="saveMemory()">
             <h2>Project memory <span class="mono muted">.maestro/memory.md</span></h2>
             <p class="hint">Learnings agents record after each ticket, kept in the repository and read by every agent. Your edits are committed with the next ticket's change{{ memoryPending() ? '; one is waiting now' : '' }}.</p>
-            <textarea class="code" [(ngModel)]="memoryText" name="memory" aria-label="Project memory" rows="12" spellcheck="false" placeholder="Nothing recorded yet."></textarea>
+            @if (memoryError()) { <p class="error" role="alert">{{ memoryError() }} <button type="button" class="link-btn" (click)="loadMemory()">Retry</button></p> }
+            <textarea class="code" [(ngModel)]="memoryText" name="memory" aria-label="Project memory" rows="12" spellcheck="false" placeholder="Nothing recorded yet." [disabled]="!!memoryError()"></textarea>
             <div class="row">
-              <button appNeeds="project.configure" class="primary" type="submit">Save</button>
+              <button appNeeds="project.configure" class="primary" type="submit" [disabled]="!!memoryError()">Save</button>
               @if (memoryPending()) { <button appNeeds="project.configure" type="button" class="quiet" (click)="discardMemory()">Discard my edit</button> }
             </div>
           </form>
@@ -253,6 +254,7 @@ export class ProjectPage {
   readonly planError = signal('');
   readonly draft = signal<BacklogDraft | null>(null);
   readonly memoryPending = signal(false);
+  readonly memoryError = signal('');
   readonly spend = signal<ProjectSpend | null>(null);
   budgetTokens: number | null = null;
   budgetEur: number | null = null;
@@ -294,7 +296,7 @@ export class ProjectPage {
   }
 
   async loadSpend(): Promise<void> {
-    const s = (await this.api.spend().catch(() => [])).find((x) => x.projectId === this.id()) ?? null;
+    const s = (await this.api.spend().catch((e: Error) => (this.flash(`Usage couldn't be loaded: ${e.message}`), []))).find((x) => x.projectId === this.id()) ?? null;
     this.spend.set(s);
     this.budgetTokens = s?.own.tokens ? Number(s.own.tokens) : null;
     this.budgetEur = s?.own.eur ? Number(s.own.eur) : null;
@@ -319,12 +321,19 @@ export class ProjectPage {
   }
 
   async loadMemory(): Promise<void> {
-    const m = await this.api.memory(this.id()).catch(() => ({ content: '', pending: false }));
-    this.memoryText = m.content;
-    this.memoryPending.set(m.pending);
+    try {
+      const m = await this.api.memory(this.id());
+      this.memoryText = m.content;
+      this.memoryPending.set(m.pending);
+      this.memoryError.set('');
+    } catch (e) {
+      // Never show an empty editor for memory that couldn't be read: saving it would wipe the file.
+      this.memoryError.set(`The project memory couldn't be read: ${(e as Error).message}`);
+    }
   }
 
   async saveMemory(): Promise<void> {
+    if (this.memoryError()) return;
     try {
       await this.api.saveMemory(this.id(), this.memoryText);
       this.memoryPending.set(true);
@@ -340,7 +349,7 @@ export class ProjectPage {
   }
 
   async loadDraft(): Promise<void> {
-    const drafts = await this.api.drafts(this.id()).catch(() => []);
+    const drafts = await this.api.drafts(this.id()).catch((e: Error) => (this.flash(`Backlog drafts couldn't be loaded: ${e.message}`), []));
     this.draft.set(drafts.find((d) => d.status === 'draft') ?? null);
   }
 

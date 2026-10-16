@@ -1,26 +1,36 @@
 import { Injectable } from '@angular/core';
-import type { ActivityEntry, UserUsage, SessionUser, UserRole, UserView, Agent, Alert, BacklogDraft, Caps, ChatThread, DirListing, Usage, ChatAction, ChatMessage, ChatModels, Choice, Metrics, Overview, ProviderConfig, ProviderView, ProvidersInfo, Role, ProjectTemplate, ProjectSpend, BacklogItem, Project, PullRequestRow, Review, ReviewComment, Run, RunEvent, SecretInfo, Ticket, TicketStatus } from './models';
+import type { SystemCheck, ActivityEntry, UserUsage, SessionUser, UserRole, UserView, Agent, Alert, BacklogDraft, Caps, ChatThread, DirListing, Usage, ChatAction, ChatMessage, ChatModels, Choice, Metrics, Overview, ProviderConfig, ProviderView, ProvidersInfo, Role, ProjectTemplate, ProjectSpend, BacklogItem, Project, PullRequestRow, Review, ReviewComment, Run, RunEvent, SecretInfo, Ticket, TicketStatus } from './models';
 
+/** An error from the engine: what went wrong, its code (see the user guide's Troubleshooting) and how to fix it. */
 export class ApiError extends Error {
-  constructor(message: string, readonly status: number, readonly reasons: string[] = [], readonly code?: string) {
-    super(message);
+  constructor(message: string, readonly status: number, readonly reasons: string[] = [], readonly code?: string, readonly hint?: string) {
+    // The fix is part of the message, so every place that shows an error shows it too.
+    super(hint ? `${message} ${hint}` : message);
   }
 }
 
 @Injectable({ providedIn: 'root' })
 export class Api {
   private async call<T>(method: string, path: string, body?: unknown): Promise<T> {
-    const res = await fetch(`/api${path}`, {
-      method,
-      headers: body === undefined ? {} : { 'Content-Type': 'application/json' },
-      body: body === undefined ? undefined : JSON.stringify(body),
-    });
-    const data = res.headers.get('content-type')?.includes('json') ? await res.json() : undefined;
+    let res: Response;
+    try {
+      res = await fetch(`/api${path}`, {
+        method,
+        headers: body === undefined ? {} : { 'Content-Type': 'application/json' },
+        body: body === undefined ? undefined : JSON.stringify(body),
+      });
+    } catch {
+      throw new ApiError("Maestro's engine isn't answering.", 0, [], 'engine_unreachable', 'Check that it is running (docker compose ps), then try again.');
+    }
+    const data = res.headers.get('content-type')?.includes('json') ? await res.json().catch(() => undefined) : undefined;
+    if (!res.ok && !data) {
+      throw new ApiError(res.status === 502 || res.status === 504 ? "Maestro's engine isn't answering." : `The request failed (${res.status} ${res.statusText}).`, res.status, [], res.status >= 500 ? 'engine_unreachable' : 'http_error', res.status >= 500 ? 'Check that it is running (docker compose ps), then try again.' : undefined);
+    }
     if (!res.ok) {
       // A lost session or a required password change sends the app to the right page (see Session).
       if (res.status === 401 && !path.startsWith('/auth/')) window.dispatchEvent(new CustomEvent('maestro:unauthorized'));
       if (res.status === 403 && data?.code === 'password_change_required') window.dispatchEvent(new CustomEvent('maestro:password-required'));
-      throw new ApiError(data?.error ?? res.statusText, res.status, data?.reasons ?? [], data?.code);
+      throw new ApiError(data?.error ?? res.statusText, res.status, data?.reasons ?? [], data?.code, data?.hint);
     }
     return data as T;
   }
@@ -87,7 +97,7 @@ export class Api {
   deleteChatThread = (id: string) => this.call('DELETE', `/chat/threads/${id}`);
   /** Asks in a conversation; without a threadId the engine starts a new one. */
   globalChat = (message: string, threadId?: string, projectId?: string | null) =>
-    this.call<ChatMessage & { answer: string; costUsd: number; usage: Usage | null; actions: ChatAction[]; thread: ChatThread }>('POST', '/chat', {
+    this.call<ChatMessage & { answer: string; costUsd: number; usage: Usage | null; actions: ChatAction[]; thread: ChatThread; warnings?: string[] }>('POST', '/chat', {
       message, ...(threadId ? { threadId } : {}), ...(projectId !== undefined ? { projectId } : {}),
     });
   chatModels = () => this.call<ChatModels>('GET', '/chat/models');
@@ -125,6 +135,7 @@ export class Api {
     this.call<ActivityEntry[]>('GET', `/activity?${new URLSearchParams(Object.entries(f).filter(([, v]) => v !== undefined && v !== '').map(([k, v]) => [k, String(v)]))}`);
   usageByUser = (f: { days?: number; projectId?: string; today?: boolean } = {}) =>
     this.call<UserUsage[]>('GET', `/usage/users?${new URLSearchParams({ ...(f.days ? { days: String(f.days) } : {}), ...(f.projectId ? { projectId: f.projectId } : {}), ...(f.today ? { today: '1' } : {}) })}`);
+  systemChecks = () => this.call<SystemCheck[]>('GET', '/system/checks');
   currency = () => this.call<{ eurPerUsd: number }>('GET', '/currency');
 
   settings = () => this.call<{ settings: Record<string, string>; secrets: SecretInfo[]; secretsBackend: 'keychain' | 'file' }>('GET', '/settings');

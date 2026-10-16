@@ -8,6 +8,7 @@ import type { ProvidersInfo } from '../models';
 import { Icon } from '../ui/icon';
 import { Toasts } from '../ui/toast';
 import { Currency, formatTokens } from '../ui/usage';
+import { SystemCheckPanel } from '../components/system-check';
 
 type StepId = 'ai' | 'code' | 'pm' | 'design' | 'limits' | 'notify';
 type Status = 'done' | 'optional' | 'todo';
@@ -87,7 +88,7 @@ const STEPS: Step[] = [
 /** Settings as a guided set of steps you can also jump between freely. */
 @Component({
   selector: 'app-settings',
-  imports: [FormsModule, Icon, AiProviders],
+  imports: [SystemCheckPanel, FormsModule, Icon, AiProviders],
   template: `
     <header class="page-head">
       <div>
@@ -96,6 +97,7 @@ const STEPS: Step[] = [
       </div>
     </header>
     @if (loadError()) { <p class="error">{{ loadError() }}</p> }
+    <app-system-check />
 
     <div class="stepper">
       @for (s of steps; track s.id; let i = $index) {

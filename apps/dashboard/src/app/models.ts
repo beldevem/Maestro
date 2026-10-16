@@ -335,6 +335,8 @@ export interface ChatMessage {
   model?: string | null;
   createdAt?: string;
   actions?: ChatAction[];
+  /** Problems behind the answer (a PM tool that couldn't be read). */
+  warnings?: string[];
 }
 
 export interface RunEvent {
@@ -442,4 +444,13 @@ export interface UserUsage {
   usage: Usage | null;
   runs: number;
   successRate: number | null;
+}
+
+/** One item of the engine's self-check. */
+export interface SystemCheck {
+  id: string;
+  label: string;
+  level: 'ok' | 'warning' | 'error';
+  message: string;
+  hint?: string;
 }
