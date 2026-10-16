@@ -71,6 +71,7 @@ const STEPS: Step[] = [
       { key: 'budget.projectDailyTokens', label: 'Daily budget per project (tokens)', hint: 'A project can override it on its Runs tab. 0 means no limit.', type: 'number', min: 0, step: 1000000 },
       { key: 'budget.perRunEur', label: 'Optional cap per run (€)', hint: 'From each provider’s prices; local models cost €0. 0 means no euro cap.', type: 'number', min: 0, step: 0.5 },
       { key: 'budget.projectDailyEur', label: 'Optional daily cap per project (€)', hint: '0 means no euro cap.', type: 'number', min: 0, step: 1 },
+      { key: 'budget.userDailyTokens', label: 'Daily budget per person (tokens)', hint: 'Optional: the tokens one person’s runs, chat and planning may use per day. 0 means no limit.', type: 'number', min: 0, step: 100000 },
       { key: 'currency.eurPerUsd', label: 'USD → EUR rate (rough estimate)', hint: 'Provider prices are in USD; euro figures are only an estimate with this rate. Not fetched online.', type: 'number', min: 0, step: 0.01 },
       { key: 'worktrees.keepDays', label: 'Keep worktrees of finished runs (days)', hint: 'Branches always stay. -1 keeps worktrees forever.', type: 'number', min: -1, step: 1 },
     ],

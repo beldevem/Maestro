@@ -7,6 +7,7 @@ import { Live } from '../live';
 import { Confirm } from '../ui/confirm';
 import { CHECKS_LABEL, RUN_LABEL, VERDICT_LABEL, type Review, type Run, type RunEvent } from '../models';
 import { UsageView } from '../ui/usage';
+import { People } from '../people';
 
 @Component({
   selector: 'app-run',
@@ -28,6 +29,7 @@ import { UsageView } from '../ui/usage';
         @if (r.checks) { <div><dt>CI</dt><dd><span class="checks-{{ r.checks }}">{{ checksLabel[r.checks] }}</span></dd></div> }
         <div><dt>Usage</dt><dd><app-usage [usage]="r.usage" [usd]="r.costUsd" /></dd></div>
         <div><dt>Started</dt><dd>{{ r.startedAt | date: 'medium' }}</dd></div>
+        @if (people.startedBy(r); as by) { <div><dt>Started by</dt><dd>{{ by }}</dd></div> }
         @if (r.prUrl) { <div><dt>Pull request</dt><dd><a [href]="r.prUrl" target="_blank" rel="noopener">{{ r.prUrl }}</a></dd></div> }
       </dl>
       @if (r.error) { <p class="error">{{ r.error }}</p> }
@@ -95,6 +97,7 @@ import { UsageView } from '../ui/usage';
   `,
 })
 export class RunPage {
+  readonly people = inject(People);
   private readonly api = inject(Api);
   private readonly confirmDialog = inject(Confirm);
   private readonly live = inject(Live);

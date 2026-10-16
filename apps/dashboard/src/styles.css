@@ -541,3 +541,6 @@ input[aria-invalid='true'] { border-color: var(--bad); }
 .activity-filters label { display: flex; flex-direction: column; gap: 4px; min-width: 140px; }
 .activity-table td { vertical-align: top; }
 .table-scroll { overflow-x: auto; }
+.usage-people ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.usage-people li { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; padding: 4px 0; border-top: 1px solid var(--border); }
+.usage-people h2 { margin-top: 0; }

@@ -15,6 +15,7 @@ import { ConnectorFields } from './connector-fields';
 import { deletionDetails } from './projects';
 import { UsageView, describeCaps, formatTokens } from '../ui/usage';
 import { ProjectMembers } from '../components/project-members';
+import { People } from '../people';
 
 type Tab = 'board' | 'knowledge' | 'workflow' | 'runs' | 'chat' | 'connectors' | 'members';
 
@@ -167,7 +168,7 @@ type Tab = 'board' | 'knowledge' | 'workflow' | 'runs' | 'chat' | 'connectors' |
           </form>
           @if (projectRuns().length === 0) { <p class="empty">No runs yet. Assign a ticket on the board.</p> } @else {
           <table class="table">
-            <thead><tr><th>Ticket</th><th>Status</th><th>Branch</th><th>Fix tries</th><th>Usage</th><th>Started</th><th></th></tr></thead>
+            <thead><tr><th>Ticket</th><th>Status</th><th>Branch</th><th>Fix tries</th><th>Usage</th><th>Started</th><th>By</th><th></th></tr></thead>
             <tbody>
               @for (r of projectRuns(); track r.id) {
                 <tr>
@@ -177,6 +178,7 @@ type Tab = 'board' | 'knowledge' | 'workflow' | 'runs' | 'chat' | 'connectors' |
                   <td>{{ r.attempts }}</td>
                   <td><app-usage [usage]="r.usage" [usd]="r.costUsd" /></td>
                   <td>{{ r.startedAt | date: 'short' }}</td>
+                  <td>{{ people.startedBy(r) }}</td>
                   <td>@if (r.prUrl) { <a [href]="r.prUrl" target="_blank" rel="noopener">PR</a> }</td>
                 </tr>
               }
@@ -214,6 +216,7 @@ type Tab = 'board' | 'knowledge' | 'workflow' | 'runs' | 'chat' | 'connectors' |
   `,
 })
 export class ProjectPage {
+  readonly people = inject(People);
   private readonly api = inject(Api);
   private readonly live = inject(Live);
   private readonly router = inject(Router);

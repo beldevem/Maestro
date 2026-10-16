@@ -2,6 +2,7 @@ import { Component, effect, inject, signal } from '@angular/core';
 import { DecimalPipe, PercentPipe } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { Api } from '../api';
+import type { UserUsage } from '../models';
 import { RUN_LABEL, type Metrics, type Project } from '../models';
 import { UsageView, formatTokens } from '../ui/usage';
 
@@ -51,6 +52,23 @@ export function duration(ms: number | null): string {
         </div>
 
         <h2>Tickets</h2>
+        @if (byUser().length) {
+          <h2 class="sub-head">Usage by person</h2>
+          <table class="table usage-by-user">
+            <thead><tr><th>Person</th><th class="num">Usage</th><th class="num">Runs started</th><th class="num">Success rate</th></tr></thead>
+            <tbody>
+              @for (u of byUser(); track u.userId) {
+                <tr>
+                  <td>{{ u.name }}@if (!u.active) { <span class="meta"> (deactivated)</span> }</td>
+                  <td class="num"><app-usage [usage]="u.usage" [usd]="u.usd" /></td>
+                  <td class="num">{{ u.runs }}</td>
+                  <td class="num">{{ u.successRate === null ? '–' : (u.successRate | percent) }}</td>
+                </tr>
+              }
+            </tbody>
+          </table>
+          <h2 class="sub-head">By ticket</h2>
+        }
         <table class="table">
           <thead><tr><th>Ticket</th><th>Status</th><th class="num">Runs</th><th class="num">Fix attempts</th><th class="num">Review rounds</th><th class="num">Cycle time</th><th class="num">Usage</th></tr></thead>
           <tbody>
@@ -82,6 +100,7 @@ export class MetricsPage {
   readonly projectId = signal('');
   readonly days = signal(0);
   readonly m = signal<Metrics | null>(null);
+  readonly byUser = signal<UserUsage[]>([]);
   readonly error = signal('');
 
   constructor() {
@@ -89,6 +108,7 @@ export class MetricsPage {
     effect(() => {
       const projectId = this.projectId();
       const days = this.days();
+      this.api.usageByUser?.({ days, projectId: projectId || undefined }).then((u) => this.byUser.set(u), () => this.byUser.set([]));
       this.api.metrics(projectId || undefined, days).then(
         (m) => {
           this.m.set(m);

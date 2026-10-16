@@ -12,7 +12,7 @@ const overview: Overview = {
   agents: [{ id: 'a1', name: 'Worker 1', role: 'worker', provider: '', model: '', state: 'working', currentRunId: 'r1', note: 'On SHO-2' }],
   active: [{ runId: 'r1', projectId: 'p1', projectName: 'Shop', ticketKey: 'SHO-2', ticketTitle: 'Cart', status: 'running', prUrl: null, checks: null, error: null, costUsd: 0, usage: { input: 8000, output: 400, cache: 0 }, since: '' }],
   needsYou: [{ runId: 'r2', projectId: 'p1', projectName: 'Shop', ticketKey: 'SHO-1', ticketTitle: 'Checkout', status: 'blocked', prUrl: null, checks: null, error: 'Tests fail', costUsd: 1, usage: null, since: '', why: 'blocked' }],
-  spend: { today: { usd: 1.5, usage: { input: 1_000_000, output: 240_000, cache: 0 } }, last7Days: { usd: 0, usage: { input: 3_000_000, output: 0, cache: 0 } }, perRunCaps: { tokens: 2_000_000, eur: 0 }, dailyCapsDefault: { tokens: 20_000_000, eur: 0 } },
+  spend: { today: { usd: 1.5, usage: { input: 1_000_000, output: 240_000, cache: 0 } }, last7Days: { usd: 0, usage: { input: 3_000_000, output: 0, cache: 0 } }, perRunCaps: { tokens: 2_000_000, eur: 0 }, dailyCapsDefault: { tokens: 20_000_000, eur: 0 }, byUser: [{ userId: 'u1', name: 'Dana', roles: ['dev'], active: true, usd: 0, usage: { input: 1_000_000, output: 0, cache: 0 }, runs: 2, successRate: 1 }, { userId: 'system', name: 'Maestro (reviewer, automatic)', roles: [], active: true, usd: 0, usage: { input: 240_000, output: 0, cache: 0 }, runs: 0, successRate: null }] },
   alertsUnread: 2,
   activity: [{ id: 1, runId: 'r2', ts: '2026-10-12T10:00:00Z', kind: 'error', message: 'Tests fail\nmore', ticketKey: 'SHO-1', projectId: 'p1', projectName: 'Shop' }],
 };
@@ -45,6 +45,9 @@ describe('HomePage', () => {
     expect(el.textContent).toContain('Shop · Blocked: Tests fail');
     expect(el.textContent).toContain('2 to do · 1 in progress · 1 in review · 3 done');
     expect(el.querySelector('app-chat-panel')).not.toBeNull();
+    expect([...el.querySelectorAll('.usage-people li')].map((li) => li.textContent?.replace(/\s+/g, ' ').trim())).toEqual([
+      'Dana1M tokens≈ €0 (local)', 'Maestro (reviewer, automatic)240k tokens≈ €0 (local)',
+    ]);
   });
 
   it('minimizes the chat to a bar, closes it, and opens it again, remembering the choice', async () => {

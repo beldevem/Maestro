@@ -60,6 +60,16 @@ const WHY = { blocked: { icon: 'alert', label: 'Blocked' }, review: { icon: 'pr'
               <span class="tile-note"><app-usage [usage]="o.spend.last7Days.usage" [usd]="o.spend.last7Days.usd" /> in 7 days</span>
             </a>
           </div>
+          @if ((o.spend.byUser ?? []).length) {
+            <section class="panel usage-people" aria-label="Usage today by person">
+              <h2>Usage today by person</h2>
+              <ul>
+                @for (u of o.spend.byUser; track u.userId) {
+                  <li><span class="member-name">{{ u.name }}</span><app-usage [usage]="u.usage" [usd]="u.usd" /></li>
+                }
+              </ul>
+            </section>
+          }
 
           <section class="card section">
             <div class="section-head"><h2>Needs you</h2></div>

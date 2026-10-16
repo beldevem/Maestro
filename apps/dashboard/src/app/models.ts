@@ -108,6 +108,8 @@ export interface Run {
   reviewRounds: number;
   checks: ChecksState | null;
   readyAt: string | null;
+  startedBy?: string | null;
+  trigger?: 'manual' | 'auto' | 'chat' | null;
   startedAt: string;
   endedAt: string | null;
 }
@@ -252,7 +254,7 @@ export interface Overview {
   agents: Agent[];
   active: RunBrief[];
   needsYou: (RunBrief & { why: 'blocked' | 'review' | 'failed' })[];
-  spend: { today: Spent; last7Days: Spent; perRunCaps: Caps; dailyCapsDefault: Caps };
+  spend: { today: Spent; last7Days: Spent; perRunCaps: Caps; dailyCapsDefault: Caps; byUser?: UserUsage[] };
   alertsUnread: number;
   activity: (RunEvent & { ticketKey: string; projectId: string; projectName: string })[];
 }
@@ -428,4 +430,16 @@ export interface ActivityEntry {
   projectId: string | null;
   projectName: string | null;
   detail: Record<string, unknown> | null;
+}
+
+/** Usage by one person (or "system" for Maestro's own calls). */
+export interface UserUsage {
+  userId: string;
+  name: string;
+  roles: UserRole[];
+  active: boolean;
+  usd: number;
+  usage: Usage | null;
+  runs: number;
+  successRate: number | null;
 }

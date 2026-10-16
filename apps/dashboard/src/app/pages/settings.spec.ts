@@ -9,7 +9,7 @@ const secrets = [
   { name: 'GITHUB_TOKEN', label: 'GitHub token', help: '', set: true },
 ];
 const settings = () => Promise.resolve({
-  settings: { maxConcurrentRuns: '3', 'budget.perRunTokens': '2000000', 'budget.projectDailyTokens': '20000000', 'budget.perRunEur': '0', 'budget.projectDailyEur': '0', 'currency.eurPerUsd': '0.9', 'worktrees.keepDays': '3', 'model.worker': 'claude-sonnet-5-5' },
+  settings: { maxConcurrentRuns: '3', 'budget.perRunTokens': '2000000', 'budget.projectDailyTokens': '20000000', 'budget.perRunEur': '0', 'budget.projectDailyEur': '0', 'budget.userDailyTokens': '0', 'currency.eurPerUsd': '0.9', 'worktrees.keepDays': '3', 'model.worker': 'claude-sonnet-5-5' },
   secrets, secretsBackend: 'file' as const,
 });
 
@@ -66,7 +66,7 @@ describe('SettingsPage', () => {
     expect(page.fieldError(limits.fields[0])).toBe('At least 1.');
     page.settings['maxConcurrentRuns'] = '2';
     await page.saveFields(limits);
-    expect(saveSettings).toHaveBeenCalledWith({ maxConcurrentRuns: '2', 'budget.perRunTokens': '2000000', 'budget.projectDailyTokens': '20000000', 'budget.perRunEur': '0', 'budget.projectDailyEur': '0', 'currency.eurPerUsd': '0.9', 'worktrees.keepDays': '3' });
+    expect(saveSettings).toHaveBeenCalledWith({ maxConcurrentRuns: '2', 'budget.perRunTokens': '2000000', 'budget.projectDailyTokens': '20000000', 'budget.perRunEur': '0', 'budget.projectDailyEur': '0', 'budget.userDailyTokens': '0', 'currency.eurPerUsd': '0.9', 'worktrees.keepDays': '3' });
   });
 
   it('shows why the engine refused a save', async () => {
