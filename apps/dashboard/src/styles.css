@@ -106,7 +106,7 @@ h2 { font-size: 15px; margin: 0 0 8px; }
 }
 
 .page-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 16px; }
-.page-head > button, .page-head > a.btn, .page-head > .row { flex-shrink: 0; white-space: nowrap; }
+.page-head > button, .page-head > a.button, .page-head > .row { flex-shrink: 0; white-space: nowrap; }
 .crumb { font-size: 12px; }
 .tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--border); margin-bottom: 16px; overflow-x: auto; }
 .tabs button { border: 0; border-bottom: 2px solid transparent; border-radius: 0; background: none; padding: 8px 12px; }
@@ -477,3 +477,6 @@ input[aria-invalid='true'] { border-color: var(--bad); }
 }
 .chat-body { display: flex; flex-direction: column; gap: 10px; flex: 1; min-height: 0; }
 .chat-threads { margin-bottom: 0; }
+.chat-drawer app-chat-panel { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.chat-drawer .chat-panel { max-height: none; }
+.nav-chat, .chat-bar-open { justify-content: flex-start; }
