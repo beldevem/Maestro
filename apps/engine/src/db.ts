@@ -614,7 +614,7 @@ export class Store {
     return new Set((this.db.prepare('SELECT project_id FROM project_members WHERE user_id = ?').all(userId) as Row[]).map((r) => r.project_id as string));
   }
   listMembers(projectId: string): { userId: string; addedBy: string | null; addedAt: string }[] {
-    return (this.db.prepare('SELECT * FROM project_members WHERE project_id = ? ORDER BY added_at').all(projectId) as Row[]).map((r) => ({ userId: r.user_id, addedBy: r.added_by ?? null, addedAt: r.added_at }));
+    return (this.db.prepare('SELECT * FROM project_members WHERE project_id = ? ORDER BY added_at, rowid').all(projectId) as Row[]).map((r) => ({ userId: r.user_id, addedBy: r.added_by ?? null, addedAt: r.added_at }));
   }
   addMember(projectId: string, userId: string, addedBy: string | null): void {
     this.db.prepare('INSERT OR IGNORE INTO project_members (project_id, user_id, added_by, added_at) VALUES (?, ?, ?, ?)').run(projectId, userId, addedBy, now());

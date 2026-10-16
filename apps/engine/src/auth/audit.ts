@@ -22,7 +22,7 @@ export const AUDIT_RULES: Record<string, AuditRule> = {
   'POST /api/auth/logout': a('auth.logout', 'user'),
   'POST /api/auth/password': a('auth.password_change', 'user'),
 
-  'POST /api/projects': a('project.create', 'project', (_p, b) => pick(b, 'name')),
+  'POST /api/projects': a('project.create', 'project', (_p, b) => pick(b, 'name'), () => undefined),
   'PATCH /api/projects/:id': a('project.update', 'project', (_p, b) => ({ fields: Object.keys(b ?? {}) })),
   'DELETE /api/projects/:id': a('project.delete', 'project'),
   'POST /api/projects/:id/check': a('project.check', 'project'),
@@ -34,7 +34,7 @@ export const AUDIT_RULES: Record<string, AuditRule> = {
   'PUT /api/projects/:id/members/:userId': a('member.add', 'user', undefined, (p) => p.userId),
   'DELETE /api/projects/:id/members/:userId': a('member.remove', 'user', undefined, (p) => p.userId),
 
-  'POST /api/projects/:id/tickets': a('ticket.create', 'ticket', (_p, b) => pick(b, 'title')),
+  'POST /api/projects/:id/tickets': a('ticket.create', 'ticket', (_p, b) => pick(b, 'title'), () => undefined),
   'POST /api/projects/:id/tickets/:key/status': a('ticket.move', 'ticket', (_p, b) => pick(b, 'status'), (p) => p.key),
   'POST /api/projects/:id/tickets/:key/start': a('run.start', 'ticket', (p) => ({ ticket: p.key, trigger: 'manual' }), (p) => p.key),
   'POST /api/projects/:id/plan': a('planner.run', 'project'),
