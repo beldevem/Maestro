@@ -1,3 +1,4 @@
+import { ADMIN } from './users.js';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -42,7 +43,7 @@ describe('model validation on the API', () => {
     const secrets = new SecretStore(join(home, 's.json'));
     migrateProviders(store);
     const agent = { run: async () => ({ sessionId: '', text: '', costUsd: 0, ok: true }) };
-    const app = await buildServer({ store, secrets, agent, orchestrator: new Orchestrator({ store, secrets, agent, reposDir: home, worktreesDir: home }), reposDir: home });
+    const app = await buildServer({ actAs: ADMIN, store, secrets, agent, orchestrator: new Orchestrator({ store, secrets, agent, reposDir: home, worktreesDir: home }), reposDir: home });
     const roles = await app.inject({ method: 'PUT', url: '/api/roles', payload: { worker: { provider: 'claude', model: 'qwen3-coder:30b' } } });
     expect(roles.statusCode).toBe(400);
     expect(roles.json().error).toMatch(/doesn't offer/);

@@ -1,3 +1,4 @@
+import { ADMIN } from './users.js';
 import { mkdirSync, mkdtempSync, realpathSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -65,7 +66,7 @@ describe('folder picker', () => {
       const store = new Store(join(base, 'db.sqlite'));
       const secrets = new SecretStore(join(base, 's.json'));
       const agent = { run: async () => ({ sessionId: '', text: '', costUsd: 0, ok: true }) };
-      const app = await buildServer({ store, secrets, agent, orchestrator: new Orchestrator({ store, secrets, agent, reposDir: base, worktreesDir: base }), reposDir: base });
+      const app = await buildServer({ actAs: ADMIN, store, secrets, agent, orchestrator: new Orchestrator({ store, secrets, agent, reposDir: base, worktreesDir: base }), reposDir: base });
       const res = await app.inject({ method: 'GET', url: '/api/fs/dirs' });
       expect(res.json().dirs.map((d: { name: string }) => d.name)).toContain('shop');
       const denied = await app.inject({ method: 'GET', url: `/api/fs/dirs?path=${encodeURIComponent(outside)}` });

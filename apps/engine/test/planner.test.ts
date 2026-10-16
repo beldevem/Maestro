@@ -1,3 +1,4 @@
+import { ADMIN } from './users.js';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -41,7 +42,7 @@ describe('planner and backlog drafts', () => {
 
   async function setup(agent: CodingAgent) {
     const orchestrator = new Orchestrator({ store, secrets, agent, reposDir: join(home, 'repos'), worktreesDir: join(home, 'wt') });
-    const app = await buildServer({ store, secrets, agent, orchestrator, reposDir: join(home, 'repos') });
+    const app = await buildServer({ actAs: ADMIN, store, secrets, agent, orchestrator, reposDir: join(home, 'repos') });
     const res = await app.inject({
       method: 'POST', url: '/api/projects',
       payload: { name: 'Greeter', codeHost: { provider: 'local', localPath: join(home, 'missing'), defaultBranch: 'main' }, requirements: 'A CLI that greets the user by name' },

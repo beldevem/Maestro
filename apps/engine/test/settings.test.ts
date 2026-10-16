@@ -1,3 +1,4 @@
+import { ADMIN } from './users.js';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -16,7 +17,7 @@ async function setup() {
   const secrets = new SecretStore(join(home, 's.json'));
   const agent: CodingAgent = { run: async () => ({ sessionId: null, text: '', costUsd: 0, ok: true }) };
   const orchestrator = new Orchestrator({ store, secrets, agent, reposDir: home, worktreesDir: home });
-  return { store, orchestrator, app: await buildServer({ store, secrets, agent, orchestrator, reposDir: home }) };
+  return { store, orchestrator, app: await buildServer({ actAs: ADMIN, store, secrets, agent, orchestrator, reposDir: home }) };
 }
 
 describe('number settings', () => {

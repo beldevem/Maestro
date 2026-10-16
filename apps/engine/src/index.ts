@@ -4,6 +4,7 @@ import { ClaudeCodingAgent } from './agents/coding-agent.js';
 import { migrateProviders } from './agents/providers/config.js';
 import { ProviderRouter } from './agents/providers/router.js';
 import { ensureHome, HOST, paths, PORT } from './config.js';
+import { IDLE_MS } from './auth/sessions.js';
 import { Store } from './db.js';
 import { log } from './log.js';
 import { Orchestrator } from './orchestrator.js';
@@ -41,6 +42,8 @@ const loops = [
   setInterval(() => void orchestrator.pollPullRequests(), 60_000),
   // Worktrees of finished runs (each may hold its own node_modules) go after worktrees.keepDays (default 3; -1 keeps them).
   setInterval(() => void orchestrator.cleanupFinished(), 3_600_000),
+  // Expired and long-idle sessions.
+  setInterval(() => store.pruneSessions(new Date(Date.now() - IDLE_MS).toISOString()), 3_600_000),
 ];
 void orchestrator.tick();
 void orchestrator.cleanupFinished();

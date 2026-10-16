@@ -1,3 +1,4 @@
+import { ADMIN } from './users.js';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -26,7 +27,7 @@ describe('project templates', () => {
     const store = new Store(join(home, 'db.sqlite'));
     const secrets = new SecretStore(join(home, 's.json'));
     const agent: CodingAgent = { run: async () => ({ sessionId: null, text: '', costUsd: 0, ok: true }) };
-    const app = await buildServer({ store, secrets, agent, orchestrator: new Orchestrator({ store, secrets, agent, reposDir: home, worktreesDir: home }), reposDir: home });
+    const app = await buildServer({ actAs: ADMIN, store, secrets, agent, orchestrator: new Orchestrator({ store, secrets, agent, reposDir: home, worktreesDir: home }), reposDir: home });
     const codeHost = { provider: 'local', localPath: home, defaultBranch: 'main' };
 
     const list = (await app.inject({ method: 'GET', url: '/api/templates' })).json();

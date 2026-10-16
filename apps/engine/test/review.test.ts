@@ -1,3 +1,4 @@
+import { ADMIN } from './users.js';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -122,7 +123,7 @@ describe('review loop', () => {
     expect(agent.worker[1].prompt).toContain('hello.txt:1: Greet someone by name.');
     expect(await git(repo, ['log', '--format=%s', `main..${done.branch}`])).toBe('fix: address review feedback [DEM-1]\nfeat: say hello [DEM-1]');
     // The run's diff is the whole change, not just the last commit.
-    const app = await buildServer({ store, secrets, agent, orchestrator, reposDir: join(home, 'repos') });
+    const app = await buildServer({ actAs: ADMIN, store, secrets, agent, orchestrator, reposDir: join(home, 'repos') });
     const diff = (await app.inject({ method: 'GET', url: `/api/runs/${run.id}/diff` })).json().diff as string;
     expect(diff).toContain('fix: address review feedback [DEM-1]');
     expect(diff).toContain('feat: say hello [DEM-1]');
@@ -148,7 +149,7 @@ describe('review loop', () => {
   it('takes your review in Maestro: changes go back to the worker, approval finishes the ticket', async () => {
     const agent = new ScriptedAgent();
     const { orchestrator, project, ticket } = setup(agent);
-    const app = await buildServer({ store, secrets, agent, orchestrator, reposDir: join(home, 'repos') });
+    const app = await buildServer({ actAs: ADMIN, store, secrets, agent, orchestrator, reposDir: join(home, 'repos') });
     const run = await orchestrator.start(project.id, ticket.key);
     await waitFor(() => settled(store.getRun(run.id)!.status));
 
@@ -194,7 +195,7 @@ describe('review loop', () => {
     };
     const github = new FakeGitHub(repo);
     const { orchestrator, project, worker, ticket } = setup(agent, { github });
-    const app = await buildServer({ store, secrets, agent, orchestrator, reposDir: join(home, 'repos') });
+    const app = await buildServer({ actAs: ADMIN, store, secrets, agent, orchestrator, reposDir: join(home, 'repos') });
     const run = await orchestrator.start(project.id, ticket.key);
     await waitFor(() => settled(store.getRun(run.id)!.status));
     expect(store.getRun(run.id)!.status).toBe('blocked');

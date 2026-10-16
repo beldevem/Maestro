@@ -1,3 +1,4 @@
+import { ADMIN } from './users.js';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -145,7 +146,7 @@ describe('shutdown', () => {
     migrateProviders(store);
     const agent = new Slow();
     const orchestrator = new Orchestrator({ store, secrets, agent, reposDir: home, worktreesDir: home });
-    const app = await buildServer({ store, secrets, agent, orchestrator, reposDir: home });
+    const app = await buildServer({ actAs: ADMIN, store, secrets, agent, orchestrator, reposDir: home });
     const ready = await app.inject({ method: 'GET', url: '/api/ready' });
     expect(ready.statusCode).toBe(200);
     expect(ready.json()).toEqual({ ready: true, schema: MIGRATIONS.length });

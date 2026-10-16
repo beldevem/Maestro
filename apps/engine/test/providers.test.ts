@@ -1,3 +1,4 @@
+import { ADMIN } from './users.js';
 import { chmodSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -70,7 +71,7 @@ describe('provider API', () => {
     const { home, store, secrets } = setup();
     migrateProviders(store);
     const agent = new Recorder();
-    const app = await buildServer({ store, secrets, agent, orchestrator: new Orchestrator({ store, secrets, agent, reposDir: home, worktreesDir: home }), reposDir: home });
+    const app = await buildServer({ actAs: ADMIN, store, secrets, agent, orchestrator: new Orchestrator({ store, secrets, agent, reposDir: home, worktreesDir: home }), reposDir: home });
     const bad = await app.inject({ method: 'PUT', url: '/api/providers/local', payload: { name: 'Local', kind: 'openai', baseUrl: 'localhost:11434' } });
     expect(bad.json().error).toBe('The base URL must start with http:// or https://.');
     const added = await app.inject({ method: 'PUT', url: '/api/providers/local', payload: { name: 'Local', kind: 'openai', baseUrl: 'http://127.0.0.1:9/v1', apiKeySecret: 'PROVIDER_LOCAL_API_KEY' } });

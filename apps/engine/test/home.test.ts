@@ -1,3 +1,4 @@
+import { ADMIN } from './users.js';
 import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -29,7 +30,7 @@ async function setup(agent: CodingAgent = new FakeAssistant()) {
   const store = new Store(join(home, 'db.sqlite'));
   const secrets = new SecretStore(join(home, 's.json'));
   const orchestrator = new Orchestrator({ store, secrets, agent, reposDir: home, worktreesDir: join(home, 'wt') });
-  const app = await buildServer({ store, secrets, agent, orchestrator, reposDir: home });
+  const app = await buildServer({ actAs: ADMIN, store, secrets, agent, orchestrator, reposDir: home });
   const mk = (name: string, localPath: string) => store.createProject({
     name, description: `${name} app`, codeHost: { provider: 'local', localPath, defaultBranch: 'main' },
     pm: { provider: 'manual', settings: {} }, design: { provider: 'none', settings: {} }, context: '', requirements: `${name} requirements`, bestPractices: '',

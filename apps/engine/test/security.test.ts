@@ -1,3 +1,4 @@
+import { ADMIN } from './users.js';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -19,7 +20,7 @@ describe('request guards', () => {
     store = new Store(join(home, 'db.sqlite'));
     const secrets = new SecretStore(join(home, 's.json'));
     const agent: CodingAgent = { run: async () => ({ sessionId: null, text: '', costUsd: 0, ok: true }) };
-    app = await buildServer({ store, secrets, agent, orchestrator: new Orchestrator({ store, secrets, agent, reposDir: home, worktreesDir: home }), reposDir: home });
+    app = await buildServer({ actAs: ADMIN, store, secrets, agent, orchestrator: new Orchestrator({ store, secrets, agent, reposDir: home, worktreesDir: home }), reposDir: home });
   });
   afterEach(async () => {
     await app.close();
@@ -64,7 +65,7 @@ describe('request guards', () => {
     const s2 = new Store(join(home, 'db.sqlite'));
     const secrets = new SecretStore(join(home, 's.json'));
     const agent: CodingAgent = { run: async () => ({ sessionId: null, text: '', costUsd: 0, ok: true }) };
-    app = await buildServer({ store: s2, secrets, agent, orchestrator: new Orchestrator({ store: s2, secrets, agent, reposDir: home, worktreesDir: home }), reposDir: home });
+    app = await buildServer({ actAs: ADMIN, store: s2, secrets, agent, orchestrator: new Orchestrator({ store: s2, secrets, agent, reposDir: home, worktreesDir: home }), reposDir: home });
     expect((await app.inject({ method: 'GET', url: '/api/health', headers: { host: 'maestro.lan:4800' } })).statusCode).toBe(200);
     s2.db.close();
   });

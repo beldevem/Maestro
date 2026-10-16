@@ -1,3 +1,4 @@
+import { ADMIN } from './users.js';
 import { existsSync, mkdtempSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -186,7 +187,7 @@ describe('worker run end to end on a local repo', () => {
     const agent = new FakeAgent();
     const orchestrator = new Orchestrator({ store, secrets, agent, reposDir: join(home, 'repos'), worktreesDir: join(home, 'wt') });
     store.createAgent({ name: 'Worker 1', role: 'worker', model: '' });
-    const app = await buildServer({ store, secrets, agent, orchestrator, reposDir: join(home, 'repos') });
+    const app = await buildServer({ actAs: ADMIN, store, secrets, agent, orchestrator, reposDir: join(home, 'repos') });
 
     const created = await app.inject({
       method: 'POST', url: '/api/projects',

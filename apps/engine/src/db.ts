@@ -3,6 +3,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { randomUUID } from 'node:crypto';
 import type { Agent, Alert, AlertKind, BacklogDraft, ChatActionStatus, ChatMessage, StoredChatAction, BacklogItem, Project, Review, Run, RunEvent, RunEventKind, SpendKind, Ticket } from './types.js';
 import type { Usage } from './usage.js';
+import { ROLES, type Role, type SessionUser } from './auth/roles.js';
 import { DEFAULT_WORKFLOW_YAML } from './workflow.js';
 
 const SCHEMA = `
@@ -129,6 +130,34 @@ export const MIGRATIONS: ((db: DatabaseSync) => void)[] = [
     }
     db.prepare("DELETE FROM settings WHERE key = 'chat.model'").run();
   },
+  // 5: accounts, sessions, shared projects, the audit log, and who did what on existing rows.
+  (db) => {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS users (
+        id TEXT PRIMARY KEY, email TEXT NOT NULL COLLATE NOCASE UNIQUE, name TEXT NOT NULL, password_hash TEXT NOT NULL,
+        roles TEXT NOT NULL DEFAULT '[]', must_change_password INTEGER NOT NULL DEFAULT 0, failed_logins INTEGER NOT NULL DEFAULT 0,
+        locked_until TEXT, deactivated_at TEXT, daily_token_cap INTEGER, created_at TEXT NOT NULL, last_login_at TEXT, password_changed_at TEXT
+      );
+      CREATE TABLE IF NOT EXISTS sessions (
+        id_hash TEXT PRIMARY KEY, user_id TEXT NOT NULL, created_at TEXT NOT NULL, last_seen_at TEXT NOT NULL, expires_at TEXT NOT NULL, user_agent TEXT
+      );
+      CREATE INDEX IF NOT EXISTS sessions_user ON sessions(user_id);
+      CREATE TABLE IF NOT EXISTS project_members (
+        project_id TEXT NOT NULL, user_id TEXT NOT NULL, added_by TEXT, added_at TEXT NOT NULL, PRIMARY KEY (project_id, user_id)
+      );
+      CREATE INDEX IF NOT EXISTS project_members_user ON project_members(user_id);
+      CREATE TABLE IF NOT EXISTS audit_log (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, at TEXT NOT NULL, user_id TEXT NOT NULL, action TEXT NOT NULL,
+        target_type TEXT, target_id TEXT, project_id TEXT, detail TEXT
+      );
+      CREATE INDEX IF NOT EXISTS audit_log_at ON audit_log(at);
+      CREATE INDEX IF NOT EXISTS audit_log_user ON audit_log(user_id);
+    `);
+    for (const [table, col] of [
+      ['runs', 'started_by'], ['runs', 'run_trigger'], ['spend', 'user_id'], ['chat_threads', 'user_id'], ['chat_messages', 'user_id'],
+      ['chat_actions', 'created_by'], ['manual_tickets', 'created_by'], ['backlog_drafts', 'created_by'],
+    ]) addColumn(db, table, col, `ALTER TABLE ${table} ADD COLUMN ${col} TEXT`);
+  },
 ];
 
 /** Where a Dashboard conversation's messages and actions are kept (beside each project's own chat). */
@@ -180,6 +209,30 @@ export interface Spent {
 const SPEND_SUMS = 'COALESCE(SUM(usd), 0) AS usd, SUM(tokens_in) AS tin, SUM(tokens_out) AS tout, SUM(tokens_cache) AS tcache, COUNT(tokens_in) + COUNT(tokens_out) AS known';
 function toSpent(r: Row): Spent {
   return { usd: r.usd ?? 0, usage: r.known ? { input: Number(r.tin ?? 0), output: Number(r.tout ?? 0), cache: Number(r.tcache ?? 0) } : null };
+}
+
+export interface UserRow extends SessionUser {
+  passwordHash: string;
+  failedLogins: number;
+  lockedUntil: string | null;
+  deactivatedAt: string | null;
+  dailyTokenCap: number | null;
+  createdAt: string;
+  lastLoginAt: string | null;
+}
+
+function toUser(r: Row): UserRow {
+  let roles: Role[] = [];
+  try {
+    roles = (JSON.parse(r.roles) as string[]).filter((x): x is Role => (ROLES as readonly string[]).includes(x));
+  } catch {
+    roles = [];
+  }
+  return {
+    id: r.id, email: r.email, name: r.name, roles, mustChangePassword: !!r.must_change_password, passwordHash: r.password_hash,
+    failedLogins: r.failed_logins ?? 0, lockedUntil: r.locked_until ?? null, deactivatedAt: r.deactivated_at ?? null,
+    dailyTokenCap: r.daily_token_cap ?? null, createdAt: r.created_at, lastLoginAt: r.last_login_at ?? null,
+  };
 }
 
 export class Store {
@@ -468,6 +521,75 @@ export class Store {
   clearChat(projectId: string): void {
     this.db.prepare('DELETE FROM chat_actions WHERE project_id = ?').run(projectId);
     this.db.prepare('DELETE FROM chat_messages WHERE project_id = ?').run(projectId);
+  }
+
+  // Accounts
+  countUsers(): number {
+    return (this.db.prepare('SELECT COUNT(*) AS n FROM users').get() as Row).n;
+  }
+  createUser(input: { email: string; name: string; passwordHash: string; roles: Role[]; mustChangePassword?: boolean }): UserRow {
+    const id = randomUUID();
+    this.db.prepare('INSERT INTO users (id, email, name, password_hash, roles, must_change_password, created_at, password_changed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+      .run(id, input.email.trim(), input.name.trim(), input.passwordHash, JSON.stringify(input.roles), input.mustChangePassword ? 1 : 0, now(), now());
+    return this.getUser(id)!;
+  }
+  getUser(id: string): UserRow | undefined {
+    const row = this.db.prepare('SELECT * FROM users WHERE id = ?').get(id) as Row | undefined;
+    return row ? toUser(row) : undefined;
+  }
+  getUserByEmail(email: string): UserRow | undefined {
+    const row = this.db.prepare('SELECT * FROM users WHERE email = ?').get(email.trim()) as Row | undefined;
+    return row ? toUser(row) : undefined;
+  }
+  listUsers(): UserRow[] {
+    return (this.db.prepare('SELECT * FROM users ORDER BY deactivated_at IS NOT NULL, name COLLATE NOCASE').all() as Row[]).map(toUser);
+  }
+  updateUser(id: string, patch: Partial<{ name: string; email: string; roles: Role[]; passwordHash: string; mustChangePassword: boolean; failedLogins: number; lockedUntil: string | null; deactivatedAt: string | null; dailyTokenCap: number | null; lastLoginAt: string }>): UserRow | undefined {
+    const cols: Record<string, string> = {
+      name: 'name', email: 'email', roles: 'roles', passwordHash: 'password_hash', mustChangePassword: 'must_change_password', failedLogins: 'failed_logins',
+      lockedUntil: 'locked_until', deactivatedAt: 'deactivated_at', dailyTokenCap: 'daily_token_cap', lastLoginAt: 'last_login_at',
+    };
+    for (const [k, v] of Object.entries(patch)) {
+      if (v === undefined || !cols[k]) continue;
+      const value = k === 'roles' ? JSON.stringify(v) : k === 'mustChangePassword' ? (v ? 1 : 0) : v;
+      this.db.prepare(`UPDATE users SET ${cols[k]} = ? WHERE id = ?`).run(value as string | number | null, id);
+      if (k === 'passwordHash') this.db.prepare('UPDATE users SET password_changed_at = ? WHERE id = ?').run(now(), id);
+    }
+    return this.getUser(id);
+  }
+  /** At setup, the first account becomes the author of everything made before accounts existed. */
+  claimUnowned(userId: string): void {
+    for (const [table, col] of [
+      ['runs', 'started_by'], ['spend', 'user_id'], ['chat_threads', 'user_id'], ['chat_actions', 'created_by'],
+      ['manual_tickets', 'created_by'], ['backlog_drafts', 'created_by'],
+    ]) this.db.prepare(`UPDATE ${table} SET ${col} = ? WHERE ${col} IS NULL`).run(userId);
+    this.db.prepare("UPDATE chat_messages SET user_id = ? WHERE user_id IS NULL AND role = 'user'").run(userId);
+    this.db.prepare("UPDATE runs SET run_trigger = 'manual' WHERE run_trigger IS NULL").run();
+    const t = now();
+    for (const p of this.listProjects()) this.db.prepare('INSERT OR IGNORE INTO project_members (project_id, user_id, added_by, added_at) VALUES (?, ?, ?, ?)').run(p.id, userId, userId, t);
+  }
+
+  // Sessions: only a hash of the cookie's id is stored
+  createSession(idHash: string, userId: string, expiresAt: string, userAgent: string | null, at = now()): void {
+    const t = at;
+    this.db.prepare('INSERT INTO sessions (id_hash, user_id, created_at, last_seen_at, expires_at, user_agent) VALUES (?, ?, ?, ?, ?, ?)').run(idHash, userId, t, t, expiresAt, userAgent);
+  }
+  getSession(idHash: string): { userId: string; createdAt: string; lastSeenAt: string; expiresAt: string } | undefined {
+    const r = this.db.prepare('SELECT * FROM sessions WHERE id_hash = ?').get(idHash) as Row | undefined;
+    return r ? { userId: r.user_id, createdAt: r.created_at, lastSeenAt: r.last_seen_at, expiresAt: r.expires_at } : undefined;
+  }
+  touchSession(idHash: string, at = now()): void {
+    this.db.prepare('UPDATE sessions SET last_seen_at = ? WHERE id_hash = ?').run(at, idHash);
+  }
+  deleteSession(idHash: string): void {
+    this.db.prepare('DELETE FROM sessions WHERE id_hash = ?').run(idHash);
+  }
+  /** Ends a user's sessions, except one (the browser that just changed its own password). */
+  deleteUserSessions(userId: string, except?: string): void {
+    this.db.prepare('DELETE FROM sessions WHERE user_id = ? AND id_hash != ?').run(userId, except ?? '');
+  }
+  pruneSessions(idleBefore: string): void {
+    this.db.prepare('DELETE FROM sessions WHERE expires_at < ? OR last_seen_at < ?').run(now(), idleBefore);
   }
 
   // Dashboard conversations

@@ -1,3 +1,4 @@
+import { ADMIN } from './users.js';
 import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -57,7 +58,7 @@ describe('memory in runs', () => {
       },
     };
     const orchestrator = new Orchestrator({ store, secrets, agent, reposDir: home, worktreesDir: join(home, 'wt') });
-    const app = await buildServer({ store, secrets, agent, orchestrator, reposDir: home });
+    const app = await buildServer({ actAs: ADMIN, store, secrets, agent, orchestrator, reposDir: home });
     const p = store.createProject({
       name: 'Greeter', description: '', codeHost: { provider: 'local', localPath: repo, defaultBranch: 'main' },
       pm: { provider: 'manual', settings: {} }, design: { provider: 'none', settings: {} }, context: '', requirements: '', bestPractices: '',

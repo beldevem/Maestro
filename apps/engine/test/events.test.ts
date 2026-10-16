@@ -1,3 +1,4 @@
+import { ADMIN } from './users.js';
 import { mkdtempSync } from 'node:fs';
 import { request } from 'node:http';
 import { tmpdir } from 'node:os';
@@ -17,7 +18,7 @@ describe('live events', () => {
     const secrets = new SecretStore(join(home, 's.json'));
     const agent: CodingAgent = { run: async () => ({ sessionId: null, text: '', costUsd: 0, ok: true }) };
     const orchestrator = new Orchestrator({ store, secrets, agent, reposDir: home, worktreesDir: home });
-    const app = await buildServer({ store, secrets, agent, orchestrator, reposDir: home });
+    const app = await buildServer({ actAs: ADMIN, store, secrets, agent, orchestrator, reposDir: home });
     await app.listen({ port: 0, host: '127.0.0.1' });
     const port = (app.server.address() as { port: number }).port;
 

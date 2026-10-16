@@ -21,6 +21,9 @@ import { budgetState, dailyCaps, perRunCaps, startOfToday } from './budget.js';
 import { threadKey, titleFrom, type ChatThread, type Spent } from './db.js';
 import { addUsage, eurPerUsd } from './usage.js';
 import { checkFolder, listDirs } from './fsbrowse.js';
+import { verifyPassword } from './auth/passwords.js';
+import type { SessionUser } from './auth/roles.js';
+import { Auth, AuthError, clearedCookie, COOKIE, readCookie, sessionCookie, sessionUser } from './auth/sessions.js';
 import { DESIGN_DIR } from './adapters/design/index.js';
 import { readBaseMemory } from './memory.js';
 import { testConnection } from './connection-tests.js';
@@ -44,7 +47,23 @@ export interface ServerDeps {
   orchestrator: Orchestrator;
   reposDir: string;
   dashboardDir?: string;
+  /** Tests only: every request acts as this user, without logging in. */
+  actAs?: SessionUser;
 }
+
+declare module 'fastify' {
+  interface FastifyRequest {
+    /** The logged-in user (set from the session cookie). */
+    user?: SessionUser;
+    /** The hash of the session that made this request. */
+    sessionHash?: string;
+  }
+}
+
+/** Routes that work without a session. */
+const PUBLIC = new Set(['/api/health', '/api/ready', '/api/auth/status', '/api/auth/login', '/api/auth/setup']);
+/** What a user who must choose a new password may still do. */
+const BEFORE_PASSWORD_CHANGE = new Set(['/api/auth/status', '/api/auth/password', '/api/auth/logout']);
 
 const codeHostSchema = z.object({
   provider: z.enum(['github', 'gitlab', 'bitbucket', 'local']),
@@ -132,11 +151,33 @@ export async function buildServer(d: ServerDeps): Promise<FastifyInstance> {
     }
   });
 
+  // Who is asking: the session cookie, checked against the database on every request.
+  const auth = new Auth(d.store);
+  app.addHook('onRequest', async (req, reply) => {
+    if (d.actAs) {
+      req.user = d.actAs;
+      return;
+    }
+    const found = auth.resolve(readCookie(req.headers.cookie, COOKIE));
+    if (found) {
+      req.user = found.user;
+      req.sessionHash = found.idHash;
+    }
+    const path = req.url.split('?')[0];
+    if (!path.startsWith('/api/') || PUBLIC.has(path)) return;
+    if (!req.user) return reply.status(401).send({ error: 'Log in to continue.', code: 'unauthorized' });
+    if (req.user.mustChangePassword && !BEFORE_PASSWORD_CHANGE.has(path)) {
+      return reply.status(403).send({ error: 'Choose a new password first.', code: 'password_change_required' });
+    }
+  });
+  const secure = (req: { protocol: string }) => req.protocol === 'https';
+
   app.setErrorHandler((err, req, reply) => {
     if (err instanceof z.ZodError) return reply.status(400).send({ error: err.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; ') });
     if (err instanceof NotReadyError) return reply.status(409).send({ error: err.message, reasons: err.reasons });
     const status = (err as { statusCode?: number }).statusCode ?? 400;
     const message = redact(err instanceof Error ? err.message : String(err));
+    if (err instanceof AuthError) return reply.status(err.statusCode).send({ error: err.message, code: err.code });
     if (status >= 500) log.error('Request failed', { method: req.method, url: req.url.split('?')[0], status, error: message });
     else log.debug('Request refused', { method: req.method, url: req.url.split('?')[0], status, error: message });
     return reply.status(status).send({ error: message });
@@ -239,6 +280,45 @@ export async function buildServer(d: ServerDeps): Promise<FastifyInstance> {
   app.get<{ Querystring: { path?: string } }>('/api/fs/check', async (req) => {
     const { path } = z.object({ path: z.string().min(1).max(4096) }).parse(req.query);
     return checkFolder(path);
+  });
+
+  // Accounts: first-run setup, login, logout, your own password
+  app.get('/api/auth/status', async (req) => ({ setupNeeded: d.store.countUsers() === 0, user: req.user ?? null }));
+  app.post('/api/auth/setup', async (req, reply) => {
+    const body = z.object({ email: z.string().max(254), name: z.string().max(100), password: z.string().max(256) }).parse(req.body);
+    // Only the very first account is made here; after that, Project Managers add people.
+    if (d.store.countUsers() > 0) throw new AuthError('Maestro is already set up. Log in instead.', 409, 'already_set_up');
+    const u = await auth.createUser({ ...body, roles: ['pm', 'lead'] });
+    d.store.claimUnowned(u.id);
+    log.info('First account created', { user: u.email });
+    reply.header('set-cookie', sessionCookie(auth.startSession(u.id, req.headers['user-agent'] ?? null), secure(req)));
+    return { user: sessionUser(u) };
+  });
+  app.post('/api/auth/login', async (req, reply) => {
+    const body = z.object({ email: z.string().max(254), password: z.string().max(256) }).parse(req.body);
+    try {
+      const u = await auth.login(body.email, body.password, req.ip);
+      reply.header('set-cookie', sessionCookie(auth.startSession(u.id, req.headers['user-agent'] ?? null), secure(req)));
+      log.info('Logged in', { user: u.email });
+      return { user: sessionUser(u) };
+    } catch (e) {
+      if (e instanceof AuthError) log.warn('Login refused', { email: body.email, reason: e.code, address: req.ip });
+      throw e;
+    }
+  });
+  app.post('/api/auth/logout', async (req, reply) => {
+    auth.endSession(readCookie(req.headers.cookie, COOKIE));
+    reply.header('set-cookie', clearedCookie(secure(req)));
+    return { ok: true };
+  });
+  /** Changes your own password; your other browsers are logged out. */
+  app.post('/api/auth/password', async (req) => {
+    const body = z.object({ current: z.string().max(256), next: z.string().max(256) }).parse(req.body);
+    const u = d.store.getUser(req.user!.id);
+    if (!u || !(await verifyPassword(body.current, u.passwordHash))) throw new AuthError('Your current password is wrong.', 400, 'bad_credentials');
+    if (body.current === body.next) throw new AuthError('Choose a password different from the current one.', 400, 'same_password');
+    await auth.setPassword(u.id, body.next, { keepSession: req.sessionHash });
+    return { user: sessionUser(d.store.getUser(u.id)!) };
   });
 
   /** Liveness: the process answers. */
