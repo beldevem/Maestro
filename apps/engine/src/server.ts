@@ -20,6 +20,7 @@ import { git } from './proc.js';
 import { budgetState, dailyCaps, perRunCaps, startOfToday } from './budget.js';
 import { threadKey, titleFrom, type ChatThread, type Spent } from './db.js';
 import { addUsage, eurPerUsd } from './usage.js';
+import { checkFolder, listDirs } from './fsbrowse.js';
 import { DESIGN_DIR } from './adapters/design/index.js';
 import { readBaseMemory } from './memory.js';
 import { testConnection } from './connection-tests.js';
@@ -229,6 +230,16 @@ export async function buildServer(d: ServerDeps): Promise<FastifyInstance> {
         return { message: 'The planner is working; the draft shows up on the Board when it is done.' };
     }
   };
+
+  // Folder picker for local-folder projects: subfolders only, inside the allowed roots
+  app.get<{ Querystring: { path?: string; hidden?: string } }>('/api/fs/dirs', async (req) => {
+    const q = z.object({ path: z.string().max(4096).optional(), hidden: z.enum(['0', '1', 'true', 'false']).optional() }).parse(req.query);
+    return listDirs(q.path, { hidden: q.hidden === '1' || q.hidden === 'true' });
+  });
+  app.get<{ Querystring: { path?: string } }>('/api/fs/check', async (req) => {
+    const { path } = z.object({ path: z.string().min(1).max(4096) }).parse(req.query);
+    return checkFolder(path);
+  });
 
   /** Liveness: the process answers. */
   app.get('/api/health', async () => ({ ok: true }));

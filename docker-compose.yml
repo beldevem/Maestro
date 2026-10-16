@@ -25,6 +25,8 @@ services:
       CLAUDE_CONFIG_DIR: ${MAESTRO_DATA}/claude
       # No system keychain in a container: secrets go to $MAESTRO_DATA/secrets.json (mode 600).
       MAESTRO_SECRETS: file
+      # The folder picker for local-folder projects shows only these (comma separated); add any extra mount here.
+      MAESTRO_BROWSE_ROOTS: ${MAESTRO_BROWSE_ROOTS:-${PROJECTS_DIR}}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       GITHUB_TOKEN: ${GITHUB_TOKEN:-}
       GITLAB_TOKEN: ${GITLAB_TOKEN:-}
