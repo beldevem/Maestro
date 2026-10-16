@@ -506,3 +506,4 @@ input[aria-invalid='true'] { border-color: var(--bad); }
   .modal { top: 0; left: 0; transform: none; width: 100vw; height: 100%; max-height: none; border-radius: 0; }
   .fp-list { max-height: none; flex: 1; }
 }
+.fp-tools [aria-label="Up one folder"] app-icon { transform: rotate(-90deg); }
