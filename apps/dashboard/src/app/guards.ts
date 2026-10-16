@@ -1,5 +1,6 @@
 import { inject } from '@angular/core';
 import { type CanActivateFn, Router } from '@angular/router';
+import { Rights } from './rights';
 import { Session } from './session';
 
 /** Pages of the app: need a session, and a chosen password. */
@@ -30,4 +31,11 @@ export const hasSession: CanActivateFn = async () => {
   const session = inject(Session);
   await session.load();
   return session.user() ? true : inject(Router).createUrlTree(['/login']);
+};
+
+/** A page only for people with `action` (e.g. Settings for Tech Leads); others go to the Dashboard. */
+export const allowed = (action: string): CanActivateFn => async () => {
+  const rights = inject(Rights);
+  await rights.load();
+  return rights.can(action) ? true : inject(Router).createUrlTree(['/']);
 };
