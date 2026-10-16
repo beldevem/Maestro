@@ -51,7 +51,7 @@ describe('permissions', () => {
     const rules = Object.keys(ROUTE_RULES);
     expect(routes.filter((r) => !rules.includes(r))).toEqual([]);
     // Rules for routes built in later steps (users, activity, usage) are allowed to wait for them.
-    const later = ['/api/users', '/api/activity', '/api/usage/users', '/api/projects/:id/members'];
+    const later = ['/api/activity', '/api/usage/users'];
     expect(rules.filter((r) => !routes.includes(r) && !later.some((l) => r.split(' ')[1].startsWith(l)))).toEqual([]);
     await app.close();
   });
@@ -101,9 +101,9 @@ describe('permissions', () => {
   });
 
   it('chat proposals: a Project Manager may confirm ticket changes but not agent work, and is never offered it', async () => {
-    const { app, store, cookies, fixture } = await world();
+    const { app, store, cookies, users, fixture } = await world();
     const f = fixture();
-    const t = store.createThread({ projectId: f.project });
+    const t = store.createThread({ projectId: f.project, userId: users.pm.id });
     const msg = store.addChatMessage(`chat:${t.id}`, 'assistant', 'ok');
     const name = store.getProject(f.project)!.name;
     const assign = store.addChatAction(`chat:${t.id}`, msg.id, { type: 'assign', summary: 'x', action: { type: 'assign', project: name, ticketKey: 'P-1' } });

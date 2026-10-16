@@ -175,8 +175,9 @@ export async function askGlobalAssistant(
   override?: Choice,
 ): Promise<{ answer: string; costUsd: number; usage: Usage | null; actions: ProposedAction[]; model: string }> {
   const agents = deps.store.listAgents();
-  const runs = deps.store.listRuns().slice(0, 40);
   const projectName = new Map(digests.map((d) => [d.project.id, d.project.name]));
+  // Only runs of the projects given (the ones the asker can see).
+  const runs = deps.store.listRuns().filter((r) => projectName.has(r.projectId)).slice(0, 40);
   const projects = digests
     .map(({ project: p, tickets }) => {
       const open = tickets.filter((t) => t.status !== 'done');

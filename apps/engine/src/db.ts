@@ -179,6 +179,8 @@ export interface ChatThread {
   createdAt: string;
   updatedAt: string;
   messages: number;
+  /** Whose conversation it is. */
+  userId: string | null;
 }
 
 function addColumn(db: DatabaseSync, table: string, column: string, ddl: string): void {
@@ -491,16 +493,16 @@ export class Store {
   }
 
   // Chat with the project's assistant, kept so the conversation and proposed actions survive reloads
-  addChatMessage(projectId: string, role: ChatMessage['role'], content: string, model: string | null = null): ChatMessage {
+  addChatMessage(projectId: string, role: ChatMessage['role'], content: string, model: string | null = null, userId: string | null = null): ChatMessage {
     const createdAt = now();
-    const res = this.db.prepare('INSERT INTO chat_messages (project_id, role, content, model, created_at) VALUES (?, ?, ?, ?, ?)').run(projectId, role, content, model, createdAt);
+    const res = this.db.prepare('INSERT INTO chat_messages (project_id, role, content, model, created_at, user_id) VALUES (?, ?, ?, ?, ?, ?)').run(projectId, role, content, model, createdAt, userId);
     return { id: Number(res.lastInsertRowid), role, content, model, createdAt, actions: [] };
   }
-  addChatAction(projectId: string, messageId: number, a: { type: string; summary: string; action: unknown }): StoredChatAction {
+  addChatAction(projectId: string, messageId: number, a: { type: string; summary: string; action: unknown }, createdBy: string | null = null): StoredChatAction {
     const x: StoredChatAction = { id: randomUUID(), type: a.type, summary: a.summary, action: a.action, state: 'pending', result: null, runId: null, createdAt: now() };
     this.db
-      .prepare('INSERT INTO chat_actions (id, project_id, message_id, type, summary, action, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
-      .run(x.id, projectId, messageId, x.type, x.summary, JSON.stringify(x.action), x.state, x.createdAt);
+      .prepare('INSERT INTO chat_actions (id, project_id, message_id, type, summary, action, status, created_at, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
+      .run(x.id, projectId, messageId, x.type, x.summary, JSON.stringify(x.action), x.state, x.createdAt, createdBy);
     return x;
   }
   getChatAction(projectId: string, id: string): StoredChatAction | undefined {
@@ -611,20 +613,21 @@ export class Store {
   }
 
   // Dashboard conversations
-  createThread(input: { title?: string; projectId?: string | null; model?: ChatThread['model'] } = {}): ChatThread {
+  createThread(input: { title?: string; projectId?: string | null; model?: ChatThread['model']; userId?: string | null } = {}): ChatThread {
     const t = now();
     const id = randomUUID();
-    this.db.prepare('INSERT INTO chat_threads (id, title, project_id, model, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)')
-      .run(id, input.title ?? 'New chat', input.projectId ?? null, input.model ? JSON.stringify(input.model) : null, t, t);
+    this.db.prepare('INSERT INTO chat_threads (id, title, project_id, model, created_at, updated_at, user_id) VALUES (?, ?, ?, ?, ?, ?, ?)')
+      .run(id, input.title ?? 'New chat', input.projectId ?? null, input.model ? JSON.stringify(input.model) : null, t, t, input.userId ?? null);
     return this.getThread(id)!;
   }
   getThread(id: string): ChatThread | undefined {
     const row = this.db.prepare(`SELECT t.*, (SELECT COUNT(*) FROM chat_messages m WHERE m.project_id = 'chat:' || t.id) AS n FROM chat_threads t WHERE t.id = ?`).get(id) as Row | undefined;
     return row ? toThread(row) : undefined;
   }
-  /** Most recent activity first. */
-  listThreads(): ChatThread[] {
-    return (this.db.prepare(`SELECT t.*, (SELECT COUNT(*) FROM chat_messages m WHERE m.project_id = 'chat:' || t.id) AS n FROM chat_threads t ORDER BY t.updated_at DESC, t.rowid DESC`).all() as Row[]).map(toThread);
+  /** Most recent activity first; only one person's when `userId` is given (conversations are private). */
+  listThreads(userId?: string): ChatThread[] {
+    const where = userId ? 'WHERE t.user_id = ?' : '';
+    return (this.db.prepare(`SELECT t.*, (SELECT COUNT(*) FROM chat_messages m WHERE m.project_id = 'chat:' || t.id) AS n FROM chat_threads t ${where} ORDER BY t.updated_at DESC, t.rowid DESC`).all(...(userId ? [userId] : [])) as Row[]).map(toThread);
   }
   updateThread(id: string, patch: { title?: string; projectId?: string | null; model?: ChatThread['model']; touch?: boolean }): ChatThread | undefined {
     const cur = this.getThread(id);
@@ -638,10 +641,12 @@ export class Store {
     this.clearChat(threadKey(id));
     this.db.prepare('DELETE FROM chat_threads WHERE id = ?').run(id);
   }
-  /** A proposal from any Dashboard conversation, with the conversation it belongs to. */
-  getThreadAction(actionId: string): StoredChatAction | undefined {
+  /** A proposal from a Dashboard conversation; only from one person's conversations when `userId` is given. */
+  getThreadAction(actionId: string, userId?: string): StoredChatAction | undefined {
     const row = this.db.prepare("SELECT * FROM chat_actions WHERE id = ? AND project_id LIKE 'chat:%'").get(actionId) as Row | undefined;
-    return row ? toChatAction(row) : undefined;
+    if (!row) return undefined;
+    if (userId && this.getThread(String(row.project_id).slice('chat:'.length))?.userId !== userId) return undefined;
+    return toChatAction(row);
   }
 
   // Spend ledger: every agent call's cost, so budgets and the overview don't depend on run rows alone
@@ -736,7 +741,7 @@ function toThread(r: Row): ChatThread {
   } catch {
     model = null;
   }
-  return { id: r.id, title: r.title, projectId: r.project_id ?? null, model, createdAt: r.created_at, updatedAt: r.updated_at, messages: Number(r.n ?? 0) };
+  return { id: r.id, title: r.title, projectId: r.project_id ?? null, model, createdAt: r.created_at, updatedAt: r.updated_at, messages: Number(r.n ?? 0), userId: r.user_id ?? null };
 }
 function toDraft(r: Row): BacklogDraft {
   return {

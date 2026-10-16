@@ -18,11 +18,11 @@ import { bus, type BusEvent } from './events.js';
 import { NotReadyError, Orchestrator } from './orchestrator.js';
 import { git } from './proc.js';
 import { budgetState, dailyCaps, perRunCaps, startOfToday } from './budget.js';
-import { threadKey, titleFrom, type ChatThread, type Spent } from './db.js';
+import { threadKey, titleFrom, type ChatThread, type Spent, type UserRow } from './db.js';
 import { addUsage, eurPerUsd } from './usage.js';
 import { checkFolder, listDirs } from './fsbrowse.js';
-import { verifyPassword } from './auth/passwords.js';
-import type { SessionUser } from './auth/roles.js';
+import { generatePassword, verifyPassword } from './auth/passwords.js';
+import type { Role, SessionUser } from './auth/roles.js';
 import { Auth, AuthError, clearedCookie, COOKIE, readCookie, sessionCookie, sessionUser } from './auth/sessions.js';
 import { actionsOf, can, CHAT_ACTION_RIGHTS, neededRoles, RIGHTS, seesAllProjects, type Action } from './auth/policy.js';
 import { ROUTE_RULES, type Scope } from './auth/routes.js';
@@ -202,6 +202,15 @@ export async function buildServer(d: ServerDeps): Promise<FastifyInstance> {
     }
     return reply.status(403).send({ error: `This needs ${neededRoles(rule.action)}.`, code: 'forbidden', needs: RIGHTS[rule.action] });
   });
+  /** The projects a user can see: all for a Tech Lead, else those they're a member of. */
+  const visibleTo = (user: SessionUser | undefined) => {
+    const all = d.store.listProjects();
+    if (!user) return [];
+    if (seesAllProjects(user)) return all;
+    const mine = d.store.memberProjectIds(user.id);
+    return all.filter((p) => mine.has(p.id));
+  };
+  const visibleIds = (user: SessionUser | undefined) => new Set(visibleTo(user).map((p) => p.id));
   /** Inside a route: refuse unless the user may do `action` (on `projectId`). */
   const must = (req: { user?: SessionUser }, action: Action, projectId?: string | null) => {
     if (!can(req.user, action, projectId, d.store)) throw Object.assign(new Error(`This needs ${neededRoles(action)}.`), { statusCode: 403 });
@@ -270,9 +279,9 @@ export async function buildServer(d: ServerDeps): Promise<FastifyInstance> {
   /** Proposed actions can be confirmed for an hour; each runs at most once. */
   const PROPOSAL_TTL_MS = 60 * 60_000;
   /** The project an action is for: the chat's own project, else the one the action names (or the only one there is). */
-  const actionProject = (scope: ReturnType<typeof project> | null, a: ProposedAction) => {
+  const actionProject = (scope: ReturnType<typeof project> | null, a: ProposedAction, user?: SessionUser) => {
     if (scope) return scope;
-    const all = d.store.listProjects();
+    const all = user ? visibleTo(user) : d.store.listProjects();
     const name = 'project' in a ? a.project?.trim().toLowerCase() : undefined;
     const found = name ? all.find((x) => x.name.toLowerCase() === name) : all.length === 1 ? all[0] : undefined;
     if (!found) throw new Error(name ? `No project called "${'project' in a ? a.project : ''}".` : 'Say which project this is for.');
@@ -285,7 +294,7 @@ export async function buildServer(d: ServerDeps): Promise<FastifyInstance> {
   const mayConfirm = (user: SessionUser | undefined, scope: ReturnType<typeof project> | null, a: ProposedAction) => {
     const action = CHAT_ACTION_RIGHTS[a.type];
     if (!action) throw Object.assign(new Error('Unknown proposal.'), { statusCode: 400 });
-    must({ user }, action, a.type === 'pause_agent' || a.type === 'resume_agent' ? null : actionProject(scope, a).id);
+    must({ user }, action, a.type === 'pause_agent' || a.type === 'resume_agent' ? null : actionProject(scope, a, user).id);
   };
   const runAction = async (scope: ReturnType<typeof project> | null, a: ProposedAction): Promise<{ message: string; runId?: string }> => {
     if (a.type === 'pause_agent' || a.type === 'resume_agent') {
@@ -365,6 +374,87 @@ export async function buildServer(d: ServerDeps): Promise<FastifyInstance> {
     return { user: sessionUser(d.store.getUser(u.id)!) };
   });
 
+  // People (Project Managers manage them) and who belongs to which project
+  const roleList = z.array(z.enum(['pm', 'lead', 'dev'])).min(1, 'Give at least one role.').transform((r) => [...new Set(r)]);
+  const activeManagers = () => d.store.listUsers().filter((u) => !u.deactivatedAt && u.roles.includes('pm'));
+  /** Maestro always keeps one active Project Manager, so someone can still manage people. */
+  const keepAManager = (userId: string, after: { roles?: Role[]; deactivated?: boolean }) => {
+    const left = activeManagers().filter((u) => u.id !== userId);
+    const stays = !after.deactivated && (after.roles ?? d.store.getUser(userId)?.roles ?? []).includes('pm');
+    if (!left.length && !stays) throw Object.assign(new Error('Maestro needs at least one Project Manager. Give the role to someone else first.'), { statusCode: 409 });
+  };
+  const userView = (u: UserRow) => ({
+    id: u.id, email: u.email, name: u.name, roles: u.roles, active: !u.deactivatedAt, mustChangePassword: u.mustChangePassword,
+    locked: !!u.lockedUntil && Date.parse(u.lockedUntil) > Date.now(), lastLoginAt: u.lastLoginAt, createdAt: u.createdAt,
+    projects: [...d.store.memberProjectIds(u.id)],
+  });
+  const person = (id: string) => {
+    const u = d.store.getUser(id);
+    if (!u) throw Object.assign(new Error('User not found.'), { statusCode: 404 });
+    return u;
+  };
+  /** Project Managers get everyone in full and every project (to add people to them); others get names and roles. */
+  app.get('/api/users', async (req) => {
+    const users = d.store.listUsers();
+    if (can(req.user, 'users.manage')) return { users: users.map(userView), projects: d.store.listProjects().map((p) => ({ id: p.id, name: p.name })) };
+    return { users: users.filter((u) => !u.deactivatedAt).map((u) => ({ id: u.id, name: u.name, roles: u.roles, active: true })) };
+  });
+  /** Adds a person with a one-time password, shown once, which they replace at first login. */
+  app.post('/api/users', async (req) => {
+    const body = z.object({ email: z.string().max(254), name: z.string().max(100), roles: roleList, projects: z.array(z.string()).default([]) }).parse(req.body);
+    const password = generatePassword();
+    const u = await auth.createUser({ ...body, password, mustChangePassword: true });
+    for (const pid of body.projects) if (d.store.getProject(pid)) d.store.addMember(pid, u.id, req.user!.id);
+    return { user: userView(u), password };
+  });
+  app.patch<{ Params: { id: string } }>('/api/users/:id', async (req) => {
+    const u = person(req.params.id);
+    const body = z.object({ name: z.string().trim().min(1).max(100).optional(), roles: roleList.optional(), active: z.boolean().optional() }).parse(req.body);
+    if (body.active === false && u.id === req.user!.id) throw Object.assign(new Error("You can't deactivate your own account."), { statusCode: 409 });
+    keepAManager(u.id, { roles: body.roles, deactivated: body.active === false || (body.active === undefined && !!u.deactivatedAt) });
+    const lostRole = body.roles && u.roles.some((r) => !body.roles!.includes(r));
+    d.store.updateUser(u.id, { name: body.name, roles: body.roles, deactivatedAt: body.active === undefined ? undefined : body.active ? null : new Date().toISOString() });
+    // Fewer rights, or no access at all: their sessions end (yours too if it's you, except this one).
+    if (lostRole || body.active === false) d.store.deleteUserSessions(u.id, u.id === req.user!.id ? req.sessionHash : undefined);
+    return userView(d.store.getUser(u.id)!);
+  });
+  app.post<{ Params: { id: string } }>('/api/users/:id/reset-password', async (req) => {
+    const u = person(req.params.id);
+    const password = generatePassword();
+    await auth.setPassword(u.id, password, { mustChange: true });
+    return { password };
+  });
+  /** Deleting deactivates: the person can't log in, and the activity log still shows who did what. */
+  app.delete<{ Params: { id: string } }>('/api/users/:id', async (req) => {
+    const u = person(req.params.id);
+    if (u.id === req.user!.id) throw Object.assign(new Error("You can't delete your own account."), { statusCode: 409 });
+    keepAManager(u.id, { deactivated: true });
+    d.store.updateUser(u.id, { deactivatedAt: new Date().toISOString() });
+    d.store.deleteUserSessions(u.id);
+    for (const pid of d.store.memberProjectIds(u.id)) d.store.removeMember(pid, u.id);
+    return { ok: true };
+  });
+
+  app.get<{ Params: { id: string } }>('/api/projects/:id/members', async (req) => {
+    const p = project(req.params.id);
+    return d.store.listMembers(p.id).flatMap((m) => {
+      const u = d.store.getUser(m.userId);
+      return u && !u.deactivatedAt ? [{ userId: u.id, name: u.name, roles: u.roles, addedAt: m.addedAt }] : [];
+    });
+  });
+  app.put<{ Params: { id: string; userId: string } }>('/api/projects/:id/members/:userId', async (req) => {
+    const p = project(req.params.id);
+    const u = person(req.params.userId);
+    if (u.deactivatedAt) throw Object.assign(new Error(`${u.name}'s account is deactivated.`), { statusCode: 409 });
+    d.store.addMember(p.id, u.id, req.user!.id);
+    return { ok: true };
+  });
+  app.delete<{ Params: { id: string; userId: string } }>('/api/projects/:id/members/:userId', async (req) => {
+    const p = project(req.params.id);
+    d.store.removeMember(p.id, person(req.params.userId).id);
+    return { ok: true };
+  });
+
   /** What you may do, so the dashboard can hide or disable the rest. */
   app.get('/api/me/rights', async (req) => ({ actions: actionsOf(req.user!), seesAllProjects: seesAllProjects(req.user!), table: RIGHTS }));
 
@@ -382,7 +472,7 @@ export async function buildServer(d: ServerDeps): Promise<FastifyInstance> {
   });
 
   // Projects
-  app.get('/api/projects', async () => d.store.listProjects());
+  app.get('/api/projects', async (req) => visibleTo(req.user));
   app.get('/api/templates', async () => TEMPLATES.map(({ id, name, description, bestPractices, gates }) => ({ id, name, description, bestPractices, gates })));
   app.post('/api/projects', async (req) => {
     const { template: templateId, ...body } = projectSchema.parse(req.body);
@@ -484,7 +574,10 @@ export async function buildServer(d: ServerDeps): Promise<FastifyInstance> {
   });
 
   // Runs
-  app.get<{ Querystring: { projectId?: string } }>('/api/runs', async (req) => d.store.listRuns(req.query.projectId));
+  app.get<{ Querystring: { projectId?: string } }>('/api/runs', async (req) => {
+    const ids = visibleIds(req.user);
+    return d.store.listRuns(req.query.projectId).filter((r) => ids.has(r.projectId));
+  });
   app.get<{ Params: { id: string } }>('/api/runs/:id', async (req) => {
     const run = d.store.getRun(req.params.id);
     if (!run) throw Object.assign(new Error('Run not found.'), { statusCode: 404 });
@@ -504,10 +597,11 @@ export async function buildServer(d: ServerDeps): Promise<FastifyInstance> {
   });
 
   // Pull requests (and local branches) waiting for or going through review
-  app.get('/api/pull-requests', async () => {
-    const projects = new Map(d.store.listProjects().map((p) => [p.id, p.name]));
+  app.get('/api/pull-requests', async (req) => {
+    const projects = new Map(visibleTo(req.user).map((p) => [p.id, p.name]));
     return d.store
       .listRuns()
+      .filter((r) => projects.has(r.projectId))
       .filter((r) => r.prUrl || ['reviewing', 'in_review'].includes(r.status) || (r.status === 'running' && r.reviewRounds > 0))
       .map((r) => {
         const reviews = d.store.listReviews(r.id);
@@ -631,9 +725,9 @@ export async function buildServer(d: ServerDeps): Promise<FastifyInstance> {
     const tickets = await pmFor(p, d.store, d.secrets).listTickets().catch(() => []);
     const reply = await askAssistant(d, p, tickets, repoDir(p), history, message);
     d.store.addSpend(p.id, null, 'chat', reply.costUsd, reply.usage);
-    d.store.addChatMessage(p.id, 'user', message);
+    d.store.addChatMessage(p.id, 'user', message, null, req.user!.id);
     const answer = d.store.addChatMessage(p.id, 'assistant', reply.answer, reply.model);
-    answer.actions = allowedProposals(req.user, reply.actions).map((action) => d.store.addChatAction(p.id, answer.id, { type: action.type, summary: describeAction(action), action }));
+    answer.actions = allowedProposals(req.user, reply.actions).map((action) => d.store.addChatAction(p.id, answer.id, { type: action.type, summary: describeAction(action), action }, req.user!.id));
     return { ...answer, answer: reply.answer, costUsd: reply.costUsd, usage: reply.usage };
   });
   app.post<{ Params: { id: string; actionId: string } }>('/api/projects/:id/chat/actions/:actionId', async (req) => {
@@ -663,10 +757,17 @@ export async function buildServer(d: ServerDeps): Promise<FastifyInstance> {
 
   // Chat across all projects: several conversations, each with its own project focus and model
   const GLOBAL = '';
-  const thread = (id: string) => {
+  /** Your own conversation (conversations are private); 404 for anyone else's. */
+  const thread = (id: string, user: SessionUser | undefined) => {
     const t = d.store.getThread(id);
-    if (!t) throw Object.assign(new Error('Conversation not found.'), { statusCode: 404 });
+    if (!t || !user || t.userId !== user.id) throw Object.assign(new Error('Conversation not found.'), { statusCode: 404 });
     return t;
+  };
+  /** A project the user can see; 404 otherwise, as if it didn't exist. */
+  const seenProject = (user: SessionUser | undefined, id: string) => {
+    const p = project(id);
+    if (!can(user, 'project.view', p.id, d.store)) throw Object.assign(new Error('Project not found.'), { statusCode: 404 });
+    return p;
   };
   /** The model a conversation uses: its own choice when that provider still exists, else the Chat role's assignment. */
   const chatChoice = (t: ChatThread) => (t.model?.provider && getProvider(d.store, t.model.provider) ? t.model : null);
@@ -676,28 +777,28 @@ export async function buildServer(d: ServerDeps): Promise<FastifyInstance> {
     projectId: z.string().min(1).nullable().optional(),
     model: modelSchema.nullable().optional(),
   });
-  const checkThreadPatch = async (body: z.infer<typeof threadPatch>) => {
-    if (body.projectId) project(body.projectId);
+  const checkThreadPatch = async (body: z.infer<typeof threadPatch>, user: SessionUser | undefined) => {
+    if (body.projectId) seenProject(user, body.projectId);
     if (body.model) await checkChoice(body.model);
   };
-  app.get('/api/chat/threads', async () => d.store.listThreads());
+  app.get('/api/chat/threads', async (req) => d.store.listThreads(req.user!.id));
   app.post('/api/chat/threads', async (req) => {
     const body = threadPatch.parse(req.body ?? {});
-    await checkThreadPatch(body);
-    return d.store.createThread(body);
+    await checkThreadPatch(body, req.user);
+    return d.store.createThread({ ...body, userId: req.user!.id });
   });
   app.get<{ Params: { id: string } }>('/api/chat/threads/:id', async (req) => {
-    const t = thread(req.params.id);
+    const t = thread(req.params.id, req.user);
     return { thread: t, messages: d.store.listChat(threadKey(t.id)) };
   });
   app.patch<{ Params: { id: string } }>('/api/chat/threads/:id', async (req) => {
-    const t = thread(req.params.id);
+    const t = thread(req.params.id, req.user);
     const body = threadPatch.parse(req.body ?? {});
-    await checkThreadPatch(body);
+    await checkThreadPatch(body, req.user);
     return d.store.updateThread(t.id, body);
   });
   app.delete<{ Params: { id: string } }>('/api/chat/threads/:id', async (req) => {
-    d.store.deleteThread(thread(req.params.id).id);
+    d.store.deleteThread(thread(req.params.id, req.user).id);
     return { ok: true };
   });
   app.get<{ Querystring: { threadId?: string } }>('/api/chat/models', async (req) => {
@@ -723,26 +824,27 @@ export async function buildServer(d: ServerDeps): Promise<FastifyInstance> {
   /** Asks in a conversation; without a threadId a new conversation starts. Its title comes from the first question. */
   app.post('/api/chat', async (req) => {
     const { message, projectId, threadId } = z.object({ message: z.string().min(1), projectId: z.string().nullable().optional(), threadId: z.string().optional() }).parse(req.body);
-    if (projectId) project(projectId);
-    let t = threadId ? thread(threadId) : d.store.createThread({ projectId: projectId ?? null });
+    if (projectId) seenProject(req.user, projectId);
+    let t = threadId ? thread(threadId, req.user) : d.store.createThread({ projectId: projectId ?? null, userId: req.user!.id });
     if (projectId !== undefined && (projectId ?? null) !== t.projectId) t = d.store.updateThread(t.id, { projectId: projectId ?? null })!;
-    const scope = t.projectId ? project(t.projectId) : null;
+    // A focus on a project the user no longer sees is dropped.
+    const scope = t.projectId && can(req.user, 'project.view', t.projectId, d.store) ? project(t.projectId) : null;
     const key = threadKey(t.id);
     const history = d.store.listChat(key, 20).map(({ role, content }) => ({ role, content }));
     const digests = await Promise.all(
-      d.store.listProjects().map(async (p) => ({ project: p, tickets: await pmFor(p, d.store, d.secrets).listTickets().catch(() => []) })),
+      visibleTo(req.user).map(async (p) => ({ project: p, tickets: await pmFor(p, d.store, d.secrets).listTickets().catch(() => []) })),
     );
     const reply = await askGlobalAssistant(d, digests, scope, scope ? repoDir(scope) : '', history, message, chatChoice(t) ?? undefined);
     // Questions across all projects count toward the overall spend, not a project's budget.
     d.store.addSpend(scope ? scope.id : GLOBAL, null, 'chat', reply.costUsd, reply.usage);
-    d.store.addChatMessage(key, 'user', message);
+    d.store.addChatMessage(key, 'user', message, null, req.user!.id);
     const answer = d.store.addChatMessage(key, 'assistant', reply.answer, reply.model);
-    answer.actions = allowedProposals(req.user, reply.actions).map((action) => d.store.addChatAction(key, answer.id, { type: action.type, summary: describeAction(action), action }));
+    answer.actions = allowedProposals(req.user, reply.actions).map((action) => d.store.addChatAction(key, answer.id, { type: action.type, summary: describeAction(action), action }, req.user!.id));
     const updated = d.store.updateThread(t.id, { ...(t.messages === 0 && t.title === 'New chat' ? { title: titleFrom(message) } : {}), touch: true })!;
     return { ...answer, answer: reply.answer, costUsd: reply.costUsd, usage: reply.usage, thread: updated };
   });
   app.post<{ Params: { actionId: string } }>('/api/chat/actions/:actionId', async (req) => {
-    const stored = d.store.getThreadAction(req.params.actionId);
+    const stored = d.store.getThreadAction(req.params.actionId, req.user!.id);
     const fresh = stored && Date.now() - new Date(stored.createdAt).getTime() < PROPOSAL_TTL_MS;
     if (stored && fresh) mayConfirm(req.user, null, proposedActionSchema.parse(stored.action));
     if (!stored || !fresh || !d.store.claimChatAction(stored.id, 'done')) {
@@ -758,16 +860,17 @@ export async function buildServer(d: ServerDeps): Promise<FastifyInstance> {
     }
   });
   app.delete<{ Params: { actionId: string } }>('/api/chat/actions/:actionId', async (req) => {
-    const stored = d.store.getThreadAction(req.params.actionId);
+    const stored = d.store.getThreadAction(req.params.actionId, req.user!.id);
     if (stored && d.store.claimChatAction(stored.id, 'dismissed')) d.store.finishChatAction(stored.id, 'dismissed', 'Dismissed');
     return { ok: true };
   });
 
   // Overview for the dashboard home: what is happening, what needs you, what it costs
-  app.get('/api/overview', async () => {
+  app.get('/api/overview', async (req) => {
     const today = startOfToday();
-    const runs = d.store.listRuns();
-    const projects = d.store.listProjects();
+    const projects = visibleTo(req.user);
+    const seen = new Set(projects.map((p) => p.id));
+    const runs = d.store.listRuns().filter((r) => seen.has(r.projectId));
     const names = new Map(projects.map((p) => [p.id, p.name]));
     const spendToday = d.store.spendByProject(today);
     const spendWeek = d.store.spendByProject(new Date(Date.now() - 7 * 86_400_000).toISOString());
@@ -806,19 +909,20 @@ export async function buildServer(d: ServerDeps): Promise<FastifyInstance> {
         ...runs.filter((r) => r.status === 'failed' && (r.endedAt ?? '') >= today).map((r) => ({ ...brief(r), why: 'failed' as const })),
       ],
       spend: {
-        today: sumSpent(spendToday.values()),
-        last7Days: sumSpent(spendWeek.values()),
+        today: sumSpent([...spendToday].filter(([id]) => seen.has(id) || (id === GLOBAL && seesAllProjects(req.user!))).map(([, v]) => v)),
+        last7Days: sumSpent([...spendWeek].filter(([id]) => seen.has(id) || (id === GLOBAL && seesAllProjects(req.user!))).map(([, v]) => v)),
         perRunCaps: perRunCaps(d.store),
         dailyCapsDefault: dailyCaps(d.store, ''),
       },
-      alertsUnread: d.store.listAlerts(50).filter((a) => !a.read).length,
-      activity: d.store.recentEvents(15).map((e) => ({ ...e, projectName: names.get(e.projectId) ?? 'Removed project' })),
+      alertsUnread: d.store.listAlerts(50).filter((a) => !a.read && (!a.projectId || seen.has(a.projectId))).length,
+      activity: d.store.recentEvents(60).filter((e) => seen.has(e.projectId)).slice(0, 15).map((e) => ({ ...e, projectName: names.get(e.projectId) ?? 'Removed project' })),
     };
   });
 
   // Alerts: blocked, failed, budget reached, ready for review
-  app.get('/api/alerts', async () => {
-    const alerts = d.store.listAlerts(50);
+  app.get('/api/alerts', async (req) => {
+    const ids = visibleIds(req.user);
+    const alerts = d.store.listAlerts(100).filter((a) => !a.projectId || ids.has(a.projectId)).slice(0, 50);
     return { alerts, unread: alerts.filter((a) => !a.read).length };
   });
   app.post('/api/alerts/read', async (req) => {
@@ -831,16 +935,18 @@ export async function buildServer(d: ServerDeps): Promise<FastifyInstance> {
   app.get<{ Querystring: { projectId?: string; days?: string } }>('/api/metrics', async (req) => {
     const { days } = z.object({ days: z.coerce.number().int().min(0).max(3650).default(0) }).parse(req.query);
     const since = days > 0 ? new Date(Date.now() - days * 86_400_000).toISOString() : '';
-    const runs = d.store.listAllRuns(req.query.projectId).filter((r) => r.startedAt >= since);
+    const ids = visibleIds(req.user);
+    if (req.query.projectId && !ids.has(req.query.projectId)) throw Object.assign(new Error('Project not found.'), { statusCode: 404 });
+    const runs = d.store.listAllRuns(req.query.projectId).filter((r) => r.startedAt >= since && ids.has(r.projectId));
     return computeMetrics(runs, (id) => d.store.listReviews(id));
   });
 
   // Spend and budgets
-  app.get('/api/spend', async () => {
+  app.get('/api/spend', async (req) => {
     const today = d.store.spendByProject(startOfToday());
     const week = d.store.spendByProject(new Date(Date.now() - 7 * 86_400_000).toISOString());
     const total = d.store.spendByProject();
-    return d.store.listProjects().map((p) => ({
+    return visibleTo(req.user).map((p) => ({
       projectId: p.id, name: p.name,
       today: today.get(p.id) ?? NONE, last7Days: week.get(p.id) ?? NONE, total: total.get(p.id) ?? NONE,
       dailyCaps: dailyCaps(d.store, p.id),
