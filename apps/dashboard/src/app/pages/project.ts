@@ -14,12 +14,13 @@ import { Toasts } from '../ui/toast';
 import { ConnectorFields } from './connector-fields';
 import { deletionDetails } from './projects';
 import { UsageView, describeCaps, formatTokens } from '../ui/usage';
+import { ProjectMembers } from '../components/project-members';
 
-type Tab = 'board' | 'knowledge' | 'workflow' | 'runs' | 'chat' | 'connectors';
+type Tab = 'board' | 'knowledge' | 'workflow' | 'runs' | 'chat' | 'connectors' | 'members';
 
 @Component({
   selector: 'app-project',
-  imports: [FormsModule, RouterLink, DatePipe, ConnectorFields, BacklogDraftPanel, ChatPanel, Icon, ProjectAi, UsageView],
+  imports: [FormsModule, RouterLink, DatePipe, ConnectorFields, BacklogDraftPanel, ChatPanel, Icon, ProjectAi, UsageView, ProjectMembers],
   template: `
     @if (project(); as p) {
       <header class="page-head">
@@ -189,6 +190,9 @@ type Tab = 'board' | 'knowledge' | 'workflow' | 'runs' | 'chat' | 'connectors';
           <p class="hint">This is the Dashboard's assistant, focused on {{ p.name }}. <a routerLink="/" [queryParams]="{ project: p.id }">Open it on the Dashboard</a> to ask across projects.</p>
         }
 
+        @case ('members') {
+          <app-project-members [projectId]="p.id" />
+        }
         @case ('connectors') {
           <form class="panel" (ngSubmit)="save({ codeHost: p.codeHost, pm: p.pm, design: p.design, docs: p.docs })">
             <app-connector-fields [model]="p" />
@@ -224,6 +228,7 @@ export class ProjectPage {
     { id: 'runs', label: 'Runs' },
     { id: 'chat', label: 'Chat' },
     { id: 'connectors', label: 'Connectors' },
+    { id: 'members', label: 'Members' },
   ];
   readonly columns: TicketStatus[] = ['todo', 'in_progress', 'in_review', 'done'];
   readonly sizes = ['XS', 'S', 'M', 'L', 'XL'];

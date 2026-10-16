@@ -401,3 +401,17 @@ export interface SessionUser {
   roles: UserRole[];
   mustChangePassword: boolean;
 }
+
+/** A person, as the Users page (full) or anyone else (name and roles) sees them. */
+export interface UserView {
+  id: string;
+  name: string;
+  roles: UserRole[];
+  active: boolean;
+  email?: string;
+  mustChangePassword?: boolean;
+  locked?: boolean;
+  lastLoginAt?: string | null;
+  createdAt?: string;
+  projects?: string[];
+}

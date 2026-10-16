@@ -1,5 +1,5 @@
 import { Injectable } from '@angular/core';
-import type { SessionUser, UserRole, Agent, Alert, BacklogDraft, Caps, ChatThread, DirListing, Usage, ChatAction, ChatMessage, ChatModels, Choice, Metrics, Overview, ProviderConfig, ProviderView, ProvidersInfo, Role, ProjectTemplate, ProjectSpend, BacklogItem, Project, PullRequestRow, Review, ReviewComment, Run, RunEvent, SecretInfo, Ticket, TicketStatus } from './models';
+import type { SessionUser, UserRole, UserView, Agent, Alert, BacklogDraft, Caps, ChatThread, DirListing, Usage, ChatAction, ChatMessage, ChatModels, Choice, Metrics, Overview, ProviderConfig, ProviderView, ProvidersInfo, Role, ProjectTemplate, ProjectSpend, BacklogItem, Project, PullRequestRow, Review, ReviewComment, Run, RunEvent, SecretInfo, Ticket, TicketStatus } from './models';
 
 export class ApiError extends Error {
   constructor(message: string, readonly status: number, readonly reasons: string[] = [], readonly code?: string) {
@@ -113,6 +113,14 @@ export class Api {
   fsDirs = (path?: string, hidden = false) =>
     this.call<DirListing>('GET', `/fs/dirs?${new URLSearchParams({ ...(path ? { path } : {}), ...(hidden ? { hidden: '1' } : {}) })}`);
   fsCheck = (path: string) => this.call<{ path: string; isGitRepo: boolean; branch: string | null }>('GET', `/fs/check?${new URLSearchParams({ path })}`);
+  users = () => this.call<{ users: UserView[]; projects?: { id: string; name: string }[] }>('GET', '/users');
+  createUser = (u: { email: string; name: string; roles: UserRole[]; projects?: string[] }) => this.call<{ user: UserView; password: string }>('POST', '/users', u);
+  updateUser = (id: string, patch: { name?: string; roles?: UserRole[]; active?: boolean }) => this.call<UserView>('PATCH', `/users/${id}`, patch);
+  resetPassword = (id: string) => this.call<{ password: string }>('POST', `/users/${id}/reset-password`, {});
+  deleteUser = (id: string) => this.call('DELETE', `/users/${id}`);
+  members = (projectId: string) => this.call<{ userId: string; name: string; roles: UserRole[]; addedAt: string }[]>('GET', `/projects/${projectId}/members`);
+  addMember = (projectId: string, userId: string) => this.call('PUT', `/projects/${projectId}/members/${userId}`, {});
+  removeMember = (projectId: string, userId: string) => this.call('DELETE', `/projects/${projectId}/members/${userId}`);
   currency = () => this.call<{ eurPerUsd: number }>('GET', '/currency');
 
   settings = () => this.call<{ settings: Record<string, string>; secrets: SecretInfo[]; secretsBackend: 'keychain' | 'file' }>('GET', '/settings');
