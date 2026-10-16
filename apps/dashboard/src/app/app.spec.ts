@@ -1,5 +1,6 @@
 import { TestBed } from '@angular/core/testing';
-import { provideRouter } from '@angular/router';
+import { provideRouter, Router } from '@angular/router';
+import { Api } from './api';
 import { App } from './app';
 import { Live } from './live';
 
@@ -18,6 +19,39 @@ describe('App', () => {
     expect([...el.querySelectorAll('.nav a')].map((a) => a.getAttribute('aria-label'))).toEqual(['Dashboard', 'Projects', 'Workers', 'Pull requests', 'Metrics', 'Alerts', 'Settings']);
     expect(el.querySelector('.badge')?.textContent).toBe('2');
     expect(live.start).toHaveBeenCalled();
+  });
+});
+
+describe('Ask Maestro from any page', () => {
+  it('opens the chat in a drawer from the floating button and the menu, and closes it', async () => {
+    localStorage.clear();
+    const live = { start: vi.fn(), connected: () => true, agents: () => [], runs: () => [], alerts: () => [], unread: () => 0 };
+    const api = { projects: () => Promise.resolve([{ id: 'p1', name: 'Shop' }]), chatThreads: () => Promise.resolve([]), tickets: () => Promise.resolve([]) };
+    await TestBed.configureTestingModule({
+      imports: [App],
+      providers: [provideRouter([{ path: 'metrics', children: [] }]), { provide: Live, useValue: live }, { provide: Api, useValue: api }],
+    }).compileComponents();
+    const fixture = TestBed.createComponent(App);
+    await TestBed.inject(Router).navigateByUrl('/metrics');
+    fixture.detectChanges();
+    await fixture.whenStable();
+    const el: HTMLElement = fixture.nativeElement;
+    const launcher = el.querySelector<HTMLButtonElement>('.chat-launcher')!;
+    expect(launcher.getAttribute('aria-label')).toBe('Ask Maestro');
+    launcher.click();
+    fixture.detectChanges();
+    expect(el.querySelector('.chat-drawer[role="dialog"] app-chat-panel')).not.toBeNull();
+    expect(el.querySelector('.chat-launcher')).toBeNull();
+    expect(el.querySelector('.nav-chat')?.getAttribute('aria-expanded')).toBe('true');
+    el.querySelector<HTMLButtonElement>('.chat-drawer [aria-label="Close the chat"]')!.click();
+    fixture.detectChanges();
+    expect(el.querySelector('.chat-drawer')).toBeNull();
+    el.querySelector<HTMLButtonElement>('.nav-chat')!.click();
+    fixture.detectChanges();
+    expect(el.querySelector('.chat-drawer')).not.toBeNull();
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+    fixture.detectChanges();
+    expect(el.querySelector('.chat-drawer')).toBeNull();
   });
 });
 

@@ -14,6 +14,8 @@ const PATHS: Record<string, string> = {
   trash: 'M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14M10 11v6M14 11v6',
   check: 'M20 6L9 17l-5-5',
   x: 'M18 6L6 18M6 6l12 12',
+  minus: 'M5 12h14',
+  expand: 'M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7',
   chat: 'M21 12a8 8 0 0 1-11.6 7.1L3 21l1.9-6.4A8 8 0 1 1 21 12z',
   send: 'M22 2L11 13M22 2l-7 20-4-9-9-4z',
   play: 'M6 4l14 8-14 8z',

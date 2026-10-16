@@ -1,5 +1,5 @@
 import { Injectable } from '@angular/core';
-import type { Agent, Alert, BacklogDraft, Caps, Usage, ChatAction, ChatMessage, ChatModels, Choice, Metrics, Overview, ProviderConfig, ProviderView, ProvidersInfo, Role, ProjectTemplate, ProjectSpend, BacklogItem, Project, PullRequestRow, Review, ReviewComment, Run, RunEvent, SecretInfo, Ticket, TicketStatus } from './models';
+import type { Agent, Alert, BacklogDraft, Caps, ChatThread, Usage, ChatAction, ChatMessage, ChatModels, Choice, Metrics, Overview, ProviderConfig, ProviderView, ProvidersInfo, Role, ProjectTemplate, ProjectSpend, BacklogItem, Project, PullRequestRow, Review, ReviewComment, Run, RunEvent, SecretInfo, Ticket, TicketStatus } from './models';
 
 export class ApiError extends Error {
   constructor(message: string, readonly status: number, readonly reasons: string[] = []) {
@@ -67,12 +67,18 @@ export class Api {
   deleteAgent = (id: string) => this.call('DELETE', `/agents/${id}`);
 
   overview = () => this.call<Overview>('GET', '/overview');
-  globalChatHistory = () => this.call<ChatMessage[]>('GET', '/chat');
-  clearGlobalChat = () => this.call('DELETE', '/chat');
-  globalChat = (message: string, projectId?: string) =>
-    this.call<ChatMessage & { answer: string; costUsd: number; usage: Usage | null; actions: ChatAction[] }>('POST', '/chat', { message, ...(projectId ? { projectId } : {}) });
+  /** Dashboard conversations, most recent activity first. */
+  chatThreads = () => this.call<ChatThread[]>('GET', '/chat/threads');
+  chatThread = (id: string) => this.call<{ thread: ChatThread; messages: ChatMessage[] }>('GET', `/chat/threads/${id}`);
+  createChatThread = (init: { projectId?: string | null; model?: Choice | null } = {}) => this.call<ChatThread>('POST', '/chat/threads', init);
+  updateChatThread = (id: string, patch: { title?: string; projectId?: string | null; model?: Choice | null }) => this.call<ChatThread>('PATCH', `/chat/threads/${id}`, patch);
+  deleteChatThread = (id: string) => this.call('DELETE', `/chat/threads/${id}`);
+  /** Asks in a conversation; without a threadId the engine starts a new one. */
+  globalChat = (message: string, threadId?: string, projectId?: string | null) =>
+    this.call<ChatMessage & { answer: string; costUsd: number; usage: Usage | null; actions: ChatAction[]; thread: ChatThread }>('POST', '/chat', {
+      message, ...(threadId ? { threadId } : {}), ...(projectId !== undefined ? { projectId } : {}),
+    });
   chatModels = () => this.call<ChatModels>('GET', '/chat/models');
-  setChatModel = (choice: Choice | null) => this.call<{ current: Choice | null }>('PUT', '/chat/model', choice);
   confirmGlobalAction = (actionId: string) => this.call<{ message: string; runId?: string }>('POST', `/chat/actions/${actionId}`, {});
   dismissGlobalAction = (actionId: string) => this.call('DELETE', `/chat/actions/${actionId}`);
   chatHistory = (projectId: string) => this.call<ChatMessage[]>('GET', `/projects/${projectId}/chat`);

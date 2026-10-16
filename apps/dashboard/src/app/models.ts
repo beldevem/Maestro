@@ -199,6 +199,17 @@ export interface ChatModelGroup {
   error: string;
 }
 
+/** A Dashboard conversation: its own title, project focus and model. */
+export interface ChatThread {
+  id: string;
+  title: string;
+  projectId: string | null;
+  model: Choice | null;
+  createdAt: string;
+  updatedAt: string;
+  messages: number;
+}
+
 export interface ChatModels {
   groups: ChatModelGroup[];
   current: Choice | null;

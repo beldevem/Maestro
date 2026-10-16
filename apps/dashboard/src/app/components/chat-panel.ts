@@ -1,10 +1,10 @@
-import { Component, ElementRef, computed, effect, inject, input, signal, viewChild } from '@angular/core';
+import { Component, ElementRef, computed, effect, inject, input, output, signal, untracked, viewChild } from '@angular/core';
 import { DatePipe } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { RouterLink } from '@angular/router';
 import { Api } from '../api';
 import { Live } from '../live';
-import type { ChatAction, ChatMessage, ChatModels, Project, Ticket } from '../models';
+import type { ChatAction, ChatMessage, ChatModels, ChatThread, Project, Ticket } from '../models';
 import { renderMarkdown } from '../ui/markdown';
 import { Icon } from '../ui/icon';
 import { Confirm } from '../ui/confirm';
@@ -34,11 +34,39 @@ const SUGGESTIONS = [
           <h2><app-icon name="chat" /> Ask Maestro</h2>
           <p class="hint">About any project, ticket, pull request or run.</p>
         </div>
-        @if (messages().length) {
-          <button class="icon-btn" (click)="clear()" title="Clear conversation" aria-label="Clear conversation"><app-icon name="trash" /></button>
-        }
+        <div class="chat-head-actions">
+          <button type="button" class="icon-btn" (click)="newChat()" title="New chat" aria-label="New chat"><app-icon name="plus" /></button>
+          @if (canMinimize()) {
+            <button type="button" class="icon-btn" (click)="minimize.emit()" title="Minimize" aria-label="Minimize the chat" aria-expanded="true" aria-controls="chat-body"><app-icon name="minus" /></button>
+          }
+          @if (canClose()) {
+            <button type="button" class="icon-btn" (click)="closed.emit()" title="Close" aria-label="Close the chat"><app-icon name="x" /></button>
+          }
+        </div>
       </header>
 
+      <div class="chat-threads">
+        @if (renaming()) {
+          <form class="chat-rename" (ngSubmit)="saveTitle()">
+            <label class="sr-only" for="chat-title">Conversation title</label>
+            <input id="chat-title" [(ngModel)]="titleText" name="title" maxlength="80" (keydown.escape)="renaming.set(false)" />
+            <button type="submit" class="primary" [disabled]="!titleText.trim()">Save</button>
+            <button type="button" class="quiet" (click)="renaming.set(false)">Cancel</button>
+          </form>
+        } @else {
+          <label class="sr-only" for="chat-thread">Conversation</label>
+          <select id="chat-thread" [ngModel]="threadId()" (ngModelChange)="openThread($event)" name="thread">
+            @if (!threadId()) { <option value="">New chat</option> }
+            @for (t of visibleThreads(); track t.id) { <option [value]="t.id">{{ t.title }} · {{ t.updatedAt | date: 'MMM d, HH:mm' }}</option> }
+          </select>
+          @if (threadId()) {
+            <button type="button" class="icon-btn" (click)="startRename()" title="Rename" aria-label="Rename this conversation"><app-icon name="edit" /></button>
+            <button type="button" class="icon-btn" (click)="deleteThread()" title="Delete this conversation" aria-label="Delete this conversation"><app-icon name="trash" /></button>
+          }
+        }
+      </div>
+
+      <div class="chat-body" id="chat-body">
       <div class="chat-scope">
         <label class="sr-only" for="chat-scope">Focus</label>
         <select id="chat-scope" [ngModel]="scope()" (ngModelChange)="setScope($event)" name="scope">
@@ -126,6 +154,7 @@ const SUGGESTIONS = [
           (keydown.enter)="onEnter($any($event))"></textarea>
         <button class="primary" type="submit" [disabled]="!text.trim() || thinking()" aria-label="Send"><app-icon name="send" [size]="16" /></button>
       </form>
+      </div>
     </section>
   `,
 })
@@ -137,6 +166,12 @@ export class ChatPanel {
   /** Project to focus on when the panel opens. */
   readonly initialScope = input<string>('');
   readonly projects = input<Pick<Project, 'id' | 'name'>[]>([]);
+  /** Shows a minimize button (the Dashboard). */
+  readonly canMinimize = input(false);
+  /** Shows a close button (the Dashboard, the drawer). */
+  readonly canClose = input(false);
+  readonly minimize = output<void>();
+  readonly closed = output<void>();
 
   readonly suggestions = SUGGESTIONS;
   readonly messages = signal<ChatMessage[]>([]);
@@ -148,6 +183,11 @@ export class ChatPanel {
   readonly tickets = signal<Ticket[]>([]);
   readonly models = signal<ChatModels | null>(null);
   readonly modelKey = signal('');
+  readonly threads = signal<ChatThread[]>([]);
+  /** The open conversation; '' for a new one, created on its first question. */
+  readonly threadId = signal('');
+  readonly renaming = signal(false);
+  titleText = '';
   readonly md = renderMarkdown;
   pickFilter = '';
   text = '';
@@ -167,6 +207,11 @@ export class ChatPanel {
     const g = this.modelGroups().find((x) => x.provider === provider);
     return g?.error || g?.hint || '';
   });
+  /** On a project's page, only the conversations about that project. */
+  readonly visibleThreads = computed(() => {
+    const only = this.projects().length === 1 && this.initialScope() ? this.initialScope() : '';
+    return only ? this.threads().filter((t) => t.projectId === only) : this.threads();
+  });
   readonly scopeName = computed(() => this.projects().find((p) => p.id === this.scope())?.name ?? '');
   readonly pickOptions = computed((): ContextChip[] => {
     const name = (id: string) => this.projects().find((p) => p.id === id)?.name ?? '';
@@ -185,24 +230,96 @@ export class ChatPanel {
   });
 
   constructor() {
-    void this.api.globalChatHistory().then(
-      (m) => {
-        this.messages.set(m);
-        this.loading.set(false);
-        this.scrollDown();
-      },
-      () => this.loading.set(false),
-    );
-    effect(() => this.setScope(this.initialScope()));
+    void this.loadThreads();
+    // The page's project focus applies to a new conversation; an open one keeps its own.
+    effect(() => {
+      const scope = this.initialScope();
+      untracked(() => {
+        if (!this.threadId()) this.setScope(scope, false);
+      });
+    });
     void this.loadModels();
+  }
+
+  /** Opens the most recent conversation (on a project's page: about that project), or a new one. */
+  async loadThreads(): Promise<void> {
+    try {
+      this.threads.set(await this.api.chatThreads());
+      const latest = this.visibleThreads()[0];
+      if (latest) await this.openThread(latest.id);
+      else this.loading.set(false);
+    } catch {
+      this.loading.set(false);
+    }
+  }
+
+  async openThread(id: string): Promise<void> {
+    this.renaming.set(false);
+    if (!id) return this.newChat();
+    this.loading.set(true);
+    try {
+      const { thread, messages } = await this.api.chatThread(id);
+      this.threadId.set(thread.id);
+      this.messages.set(messages);
+      this.setScope(thread.projectId ?? '', false);
+      this.modelKey.set(thread.model ? `${thread.model.provider}::${thread.model.model}` : '');
+      this.scrollDown();
+    } catch (e) {
+      this.toasts.error((e as Error).message);
+    } finally {
+      this.loading.set(false);
+    }
+  }
+
+  /** A fresh conversation, created on its first question; it starts on the page's project focus. */
+  newChat(): void {
+    this.threadId.set('');
+    this.messages.set([]);
+    this.modelKey.set('');
+    this.renaming.set(false);
+    this.setScope(this.initialScope(), false);
+    this.loading.set(false);
+  }
+
+  startRename(): void {
+    this.titleText = this.threads().find((t) => t.id === this.threadId())?.title ?? '';
+    this.renaming.set(true);
+  }
+
+  async saveTitle(): Promise<void> {
+    const title = this.titleText.trim();
+    if (!title) return;
+    try {
+      this.replaceThread(await this.api.updateChatThread(this.threadId(), { title }));
+      this.renaming.set(false);
+    } catch (e) {
+      this.toasts.error((e as Error).message);
+    }
+  }
+
+  async deleteThread(): Promise<void> {
+    const t = this.threads().find((x) => x.id === this.threadId());
+    const ok = await this.confirmDialog.ask({ title: `Delete “${t?.title ?? 'this conversation'}”?`, body: 'Its messages and any proposals you did not confirm are removed. Other conversations stay.', confirm: 'Delete', danger: true });
+    if (!ok) return;
+    try {
+      await this.api.deleteChatThread(this.threadId());
+      this.threads.update((xs) => xs.filter((x) => x.id !== this.threadId()));
+      const next = this.visibleThreads()[0];
+      if (next) await this.openThread(next.id);
+      else this.newChat();
+    } catch (e) {
+      this.toasts.error((e as Error).message);
+    }
+  }
+
+  private replaceThread(t: ChatThread): void {
+    this.threads.update((xs) => [t, ...xs.filter((x) => x.id !== t.id)].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)));
   }
 
   async loadModels(): Promise<void> {
     if (!this.api.chatModels) return;
     try {
-      const m = await this.api.chatModels();
-      this.models.set(m);
-      this.modelKey.set(m.current ? `${m.current.provider}::${m.current.model}` : '');
+      this.models.set(await this.api.chatModels());
     } catch {
       // The picker then only offers the default.
     }
@@ -210,8 +327,14 @@ export class ChatPanel {
 
   async pickModel(key: string): Promise<void> {
     const [provider, model] = key ? key.split('::') : ['', ''];
+    const choice = provider ? { provider, model } : null;
     try {
-      await this.api.setChatModel(provider ? { provider, model } : null);
+      // A new conversation is created now, so it keeps the model you picked.
+      const t = this.threadId()
+        ? await this.api.updateChatThread(this.threadId(), { model: choice })
+        : await this.api.createChatThread({ projectId: this.scope() || null, model: choice });
+      this.threadId.set(t.id);
+      this.replaceThread(t);
       this.modelKey.set(key);
       const g = this.modelGroups().find((x) => x.provider === provider);
       this.toasts.info(provider ? `Chat now uses ${g?.name ?? provider}${model ? ' · ' + model : ''}.` : 'Chat uses the default model again.');
@@ -220,7 +343,11 @@ export class ChatPanel {
     }
   }
 
-  setScope(id: string): void {
+  /** Changes the project in focus; for an existing conversation it is saved with it. */
+  setScope(id: string, save = true): void {
+    if (save && this.threadId() && id !== this.scope()) {
+      void this.api.updateChatThread(this.threadId(), { projectId: id || null }).then((t) => this.replaceThread(t), () => undefined);
+    }
     this.scope.set(id);
     this.chips.set([]);
     this.tickets.set([]);
@@ -254,7 +381,11 @@ export class ChatPanel {
     this.thinking.set(true);
     this.scrollDown();
     try {
-      const res = await this.api.globalChat(message, this.scope() || undefined);
+      const res = await this.api.globalChat(message, this.threadId() || undefined, this.scope() || null);
+      if (res.thread) {
+        this.threadId.set(res.thread.id);
+        this.replaceThread(res.thread);
+      }
       this.messages.update((m) => [...m, { role: 'assistant', content: res.answer, createdAt: res.createdAt, model: res.model, actions: res.actions }]);
     } catch (e) {
       this.messages.update((m) => [...m, { role: 'assistant', content: `Couldn't answer: ${(e as Error).message}` }]);
@@ -279,13 +410,6 @@ export class ChatPanel {
   async dismiss(a: ChatAction): Promise<void> {
     this.setAction(a.id, { state: 'dismissed' });
     await this.api.dismissGlobalAction(a.id).catch(() => undefined);
-  }
-
-  async clear(): Promise<void> {
-    const ok = await this.confirmDialog.ask({ title: 'Clear the conversation?', body: 'The messages and any proposals you did not confirm are removed.', confirm: 'Clear', danger: true });
-    if (!ok) return;
-    await this.api.clearGlobalChat();
-    this.messages.set([]);
   }
 
   private setAction(id: string, patch: Partial<ChatAction>): void {

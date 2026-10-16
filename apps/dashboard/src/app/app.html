@@ -8,6 +8,9 @@
         @if (item.path === '/alerts' && live.unread()) { <span class="badge">{{ live.unread() }}</span> }
       </a>
     }
+    <button type="button" class="nav-chat" (click)="summon()" aria-label="Ask Maestro" [attr.aria-expanded]="dock.drawer() || (onDashboard() && dock.state() === 'open')">
+      <app-icon name="chat" /><span class="nav-label">Ask Maestro</span>
+    </button>
     <div class="nav-foot">
       <p class="conn" [class.on]="live.connected()"><span class="nav-label">{{ live.connected() ? 'Engine connected' : 'Engine offline' }}</span></p>
       <button class="icon-btn" (click)="theme.cycle()" [attr.aria-label]="'Theme: ' + theme.theme()" [title]="'Theme: ' + theme.theme()">
@@ -19,5 +22,14 @@
     <router-outlet />
   </main>
 </div>
+@if (showLauncher()) {
+  <button type="button" class="chat-launcher" (click)="summon()" aria-label="Ask Maestro" title="Ask Maestro"><app-icon name="chat" [size]="22" /></button>
+}
+@if (dock.drawer()) {
+  <div class="chat-drawer-backdrop" (click)="dock.drawer.set(false)" aria-hidden="true"></div>
+  <aside class="chat-drawer" role="dialog" aria-modal="true" aria-label="Ask Maestro">
+    <app-chat-panel [projects]="projects()" [initialScope]="pageProject()" [canClose]="true" (closed)="dock.drawer.set(false)" />
+  </aside>
+}
 <app-toasts />
 <app-confirm />

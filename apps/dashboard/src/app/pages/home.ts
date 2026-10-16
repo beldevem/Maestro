@@ -8,6 +8,7 @@ import { Live } from '../live';
 import { RUN_LABEL, STATE_LABEL, type Overview } from '../models';
 import { Icon } from '../ui/icon';
 import { UsageView, describeCaps } from '../ui/usage';
+import { ChatDock } from '../ui/chat-dock';
 
 const WHY = { blocked: { icon: 'alert', label: 'Blocked' }, review: { icon: 'pr', label: 'Ready for review' }, failed: { icon: 'x', label: 'Failed today' } } as const;
 
@@ -24,7 +25,17 @@ const WHY = { blocked: { icon: 'alert', label: 'Blocked' }, review: { icon: 'pr'
       <a class="button primary" routerLink="/projects" [queryParams]="{ new: 1 }"><app-icon name="plus" [size]="16" /> New project</a>
     </header>
 
-    <div class="home">
+    @if (dock.state() === 'minimized' && !dock.phone()) {
+      <div class="chat-bar" role="region" aria-label="Ask Maestro, minimized">
+        <button type="button" class="chat-bar-open" (click)="dock.open()" aria-expanded="false" aria-label="Expand the chat">
+          <app-icon name="chat" /> <strong>Ask Maestro</strong> <span class="hint">About any project, ticket, pull request or run</span>
+        </button>
+        <button type="button" class="icon-btn" (click)="dock.open()" title="Expand" aria-label="Expand the chat"><app-icon name="expand" /></button>
+        <button type="button" class="icon-btn" (click)="dock.close()" title="Close" aria-label="Close the chat"><app-icon name="x" /></button>
+      </div>
+    }
+
+    <div class="home" [class.solo]="!chatDocked()">
       <div class="home-main">
         @if (o(); as o) {
           <div class="tiles">
@@ -135,9 +146,11 @@ const WHY = { blocked: { icon: 'alert', label: 'Blocked' }, review: { icon: 'pr'
         }
       </div>
 
-      <aside class="home-chat">
-        <app-chat-panel [projects]="projects()" [initialScope]="focus() ?? ''" />
-      </aside>
+      @if (chatDocked()) {
+        <aside class="home-chat">
+          <app-chat-panel [projects]="projects()" [initialScope]="focus() ?? ''" [canMinimize]="true" [canClose]="true" (minimize)="dock.minimize()" (closed)="dock.close()" />
+        </aside>
+      }
     </div>
   `,
 })
@@ -151,6 +164,9 @@ export class HomePage {
   readonly o = signal<Overview | null>(null);
   readonly error = signal('');
   private readonly query = toSignal(inject(ActivatedRoute).queryParamMap);
+  readonly dock = inject(ChatDock);
+  /** The chat beside the Dashboard: open, on a wide screen (phones open it as a sheet from the chat button). */
+  readonly chatDocked = computed(() => this.dock.state() === 'open' && !this.dock.phone());
   readonly focus = computed(() => this.query()?.get('project') ?? '');
 
   readonly projects = computed(() => (this.o()?.projects ?? []).map(({ id, name }) => ({ id, name })));

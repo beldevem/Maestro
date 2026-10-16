@@ -4,6 +4,7 @@ import { provideRouter } from '@angular/router';
 import { Api } from '../api';
 import { Live } from '../live';
 import type { Overview } from '../models';
+import { ChatDock } from '../ui/chat-dock';
 import { HomePage } from './home';
 
 const overview: Overview = {
@@ -18,7 +19,7 @@ const overview: Overview = {
 
 describe('HomePage', () => {
   it('shows what is running, what needs you, projects and spend', async () => {
-    const api = { overview: () => Promise.resolve(overview), globalChatHistory: () => Promise.resolve([]), tickets: () => Promise.resolve([]) };
+    const api = { overview: () => Promise.resolve(overview), chatThreads: () => Promise.resolve([]), tickets: () => Promise.resolve([]) };
     await TestBed.configureTestingModule({
       imports: [HomePage],
       providers: [provideRouter([]), { provide: Api, useValue: api }, { provide: Live, useValue: { runs: signal([]), agents: signal([]), refresh: vi.fn() } }],
@@ -44,5 +45,41 @@ describe('HomePage', () => {
     expect(el.textContent).toContain('Shop · Blocked: Tests fail');
     expect(el.textContent).toContain('2 to do · 1 in progress · 1 in review · 3 done');
     expect(el.querySelector('app-chat-panel')).not.toBeNull();
+  });
+
+  it('minimizes the chat to a bar, closes it, and opens it again, remembering the choice', async () => {
+    localStorage.clear();
+    const api = { overview: () => Promise.resolve(overview), chatThreads: () => Promise.resolve([]), tickets: () => Promise.resolve([]) };
+    await TestBed.configureTestingModule({
+      imports: [HomePage],
+      providers: [provideRouter([]), { provide: Api, useValue: api }, { provide: Live, useValue: { runs: signal([]), agents: signal([]), refresh: vi.fn() } }],
+    }).compileComponents();
+    const f = TestBed.createComponent(HomePage);
+    f.detectChanges();
+    await f.whenStable();
+    f.detectChanges();
+    const el: HTMLElement = f.nativeElement;
+    const click = (label: string) => {
+      el.querySelector<HTMLButtonElement>(`[aria-label="${label}"]`)!.click();
+      f.detectChanges();
+    };
+    expect(el.querySelector('.home')?.classList.contains('solo')).toBe(false);
+
+    click('Minimize the chat');
+    expect(el.querySelector('app-chat-panel')).toBeNull();
+    expect(el.querySelector('.chat-bar')).not.toBeNull();
+    expect(el.querySelector('.home')?.classList.contains('solo')).toBe(true);
+    expect(el.querySelector('.chat-bar-open')?.getAttribute('aria-expanded')).toBe('false');
+    expect(localStorage.getItem('maestro.chat.dock')).toBe('minimized');
+
+    click('Close the chat');
+    expect(el.querySelector('.chat-bar')).toBeNull();
+    expect(el.querySelector('app-chat-panel')).toBeNull();
+    expect(localStorage.getItem('maestro.chat.dock')).toBe('closed');
+
+    TestBed.inject(ChatDock).summon(true);
+    f.detectChanges();
+    expect(el.querySelector('app-chat-panel')).not.toBeNull();
+    expect(localStorage.getItem('maestro.chat.dock')).toBe('open');
   });
 });
