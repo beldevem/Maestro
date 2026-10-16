@@ -2,7 +2,7 @@ import { chmodSync, existsSync, writeFileSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 import { randomUUID } from 'node:crypto';
 import type { Agent, Alert, AlertKind, BacklogDraft, ChatActionStatus, ChatMessage, StoredChatAction, BacklogItem, Project, Review, Run, RunEvent, RunEventKind, SpendKind, Ticket } from './types.js';
-import type { Usage } from './usage.js';
+import { addUsage, type Usage } from './usage.js';
 import { ROLES, type Role, type SessionUser } from './auth/roles.js';
 import { DEFAULT_WORKFLOW_YAML } from './workflow.js';
 
@@ -684,11 +684,28 @@ export class Store {
   }
 
   // Spend ledger: every agent call's cost, so budgets and the overview don't depend on run rows alone
-  addSpend(projectId: string, runId: string | null, kind: SpendKind, usd: number, usage: Usage | null = null): void {
+  /** `userId`: whose work it was (who started the run or asked the chat), or "system" for Maestro's own calls. */
+  addSpend(projectId: string, runId: string | null, kind: SpendKind, usd: number, usage: Usage | null = null, userId: string | null = null): void {
     if (!(usd > 0) && !usage) return;
     this.db
-      .prepare('INSERT INTO spend (project_id, run_id, kind, usd, tokens_in, tokens_out, tokens_cache, ts) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
-      .run(projectId, runId, kind, usd > 0 ? usd : 0, usage?.input ?? null, usage?.output ?? null, usage?.cache ?? null, now());
+      .prepare('INSERT INTO spend (project_id, run_id, kind, usd, tokens_in, tokens_out, tokens_cache, ts, user_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
+      .run(projectId, runId, kind, usd > 0 ? usd : 0, usage?.input ?? null, usage?.output ?? null, usage?.cache ?? null, now(), userId);
+  }
+  /** Spend per user since a time, in the given projects (all when not given; '' is the cross-project chat). */
+  spendByUser(sinceIso = '', projectIds?: Set<string>): Map<string, Spent> {
+    const rows = this.db.prepare(`SELECT COALESCE(user_id, 'system') AS who, project_id, ${SPEND_SUMS} FROM spend WHERE ts >= ? GROUP BY who, project_id`).all(sinceIso) as Row[];
+    const out = new Map<string, Spent>();
+    for (const r of rows) {
+      if (projectIds && !projectIds.has(r.project_id)) continue;
+      const s = toSpent(r);
+      const prev = out.get(r.who);
+      out.set(r.who, prev ? { usd: prev.usd + s.usd, usage: addUsage(prev.usage, s.usage) } : s);
+    }
+    return out;
+  }
+  /** Tokens one person used since a time, everywhere. */
+  userSpendSince(userId: string, sinceIso: string): Spent {
+    return toSpent(this.db.prepare(`SELECT ${SPEND_SUMS} FROM spend WHERE user_id = ? AND ts >= ?`).get(userId, sinceIso) as Row);
   }
   /** USD and tokens spent since a time; usage is null when no entry recorded tokens. */
   spendSince(projectId: string, sinceIso: string): Spent {

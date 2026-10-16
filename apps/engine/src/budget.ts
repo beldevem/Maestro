@@ -70,3 +70,11 @@ export function budgetState(store: Store, projectId: string, at = new Date()): B
     usdLeft: caps.eur > 0 && rate > 0 ? Math.max(0, caps.eur / rate - usd) : Infinity,
   };
 }
+
+/** Why this person may not start new work today (their daily token cap is used), or null. */
+export function userOverCap(store: Store, userId: string | null | undefined, at = new Date()): string | null {
+  const cap = numberSetting(store, 'budget.userDailyTokens');
+  if (!userId || cap <= 0) return null;
+  const used = totalTokens(store.userSpendSince(userId, startOfToday(at)).usage);
+  return used >= cap ? `${store.getUser(userId)?.name ?? 'This person'} has used their daily budget of ${formatTokens(cap)}. It resets tomorrow, or a Tech Lead can raise it in Settings.` : null;
+}

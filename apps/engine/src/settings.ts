@@ -9,6 +9,8 @@ export const NUMBER_SETTINGS: Record<string, { fallback: number; min: number; in
   // Optional euro caps on top, from each provider's prices.
   'budget.perRunEur': { fallback: 0, min: 0 },
   'budget.projectDailyEur': { fallback: 0, min: 0 },
+  // Optional: tokens one person's work may use per day (their runs, chat and planning). 0 means no limit.
+  'budget.userDailyTokens': { fallback: 0, min: 0, integer: true },
   // A rough rate for showing estimates in euros; no live rate is fetched.
   'currency.eurPerUsd': { fallback: 0.9, min: 0 },
   'worktrees.keepDays': { fallback: 3, min: -1, integer: true },

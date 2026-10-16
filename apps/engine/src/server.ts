@@ -17,7 +17,7 @@ import type { Store } from './db.js';
 import { bus, type BusEvent } from './events.js';
 import { NotReadyError, Orchestrator } from './orchestrator.js';
 import { git } from './proc.js';
-import { budgetState, dailyCaps, perRunCaps, startOfToday } from './budget.js';
+import { budgetState, dailyCaps, perRunCaps, startOfToday, userOverCap } from './budget.js';
 import { threadKey, titleFrom, type ChatThread, type Spent, type UserRow } from './db.js';
 import { addUsage, eurPerUsd } from './usage.js';
 import { checkFolder, listDirs } from './fsbrowse.js';
@@ -274,7 +274,9 @@ export async function buildServer(d: ServerDeps): Promise<FastifyInstance> {
   const repoDir = (p: ReturnType<typeof project>) => (p.codeHost.provider === 'local' ? p.codeHost.localPath ?? '' : join(d.reposDir, p.id));
   const planning = new Set<string>();
   /** Runs the planner once per project at a time and stores the draft. */
-  const plan = async (p: ReturnType<typeof project>) => {
+  const plan = async (p: ReturnType<typeof project>, userId: string | null) => {
+    const personal = userOverCap(d.store, userId);
+    if (personal) throw Object.assign(new Error(personal), { statusCode: 429 });
     if (planning.has(p.id)) throw Object.assign(new Error('The planner is already working on this project.'), { statusCode: 409 });
     const budget = budgetState(d.store, p.id);
     if (budget.over) throw new Error(`${p.name} has reached its daily budget of ${budget.over}.`);
@@ -290,7 +292,7 @@ export async function buildServer(d: ServerDeps): Promise<FastifyInstance> {
       const docs = await docsContextFor(p, d.secrets);
       const memory = repo ? await readBaseMemory(repo, parseWorkflow(p.workflowYaml).base_branch, p.codeHost.provider === 'local') : '';
       const draft = await draftBacklog(d, p, tickets, cwd, { docs, memory });
-      d.store.addSpend(p.id, null, 'planner', draft.costUsd, draft.usage);
+      d.store.addSpend(p.id, null, 'planner', draft.costUsd, draft.usage, userId);
       return draft;
     } finally {
       planning.delete(p.id);
@@ -354,7 +356,7 @@ export async function buildServer(d: ServerDeps): Promise<FastifyInstance> {
         void d.orchestrator.tick();
         return { message: `Moved ${a.ticketKey} to ${a.status.replace('_', ' ')}.` };
       case 'plan_backlog':
-        void plan(p).catch((e) => log.error(`Planning from chat failed: ${(e as Error).message}`));
+        void plan(p, by).catch((e) => log.error(`Planning from chat failed: ${(e as Error).message}`));
         return { message: 'The planner is working; the draft shows up on the Board when it is done.' };
     }
   };
@@ -509,6 +511,36 @@ export async function buildServer(d: ServerDeps): Promise<FastifyInstance> {
     }));
   });
 
+  /**
+   * Usage per person in the projects the asker sees (plus cross-project chat): tokens, USD (for the ≈ € estimate),
+   * runs they started and how many succeeded. Without usage.viewAll, only your own row.
+   */
+  const usageByUser = (user: SessionUser, sinceIso: string, projectId?: string) => {
+    const ids = projectId ? new Set([projectId]) : new Set([...visibleIds(user), ...(projectId ? [] : [GLOBAL])]);
+    const spend = d.store.spendByUser(sinceIso, ids);
+    const runs = d.store.listAllRuns(projectId).filter((r) => r.startedAt >= sinceIso && ids.has(r.projectId));
+    const people = new Map(d.store.listUsers().map((u) => [u.id, u]));
+    const who = new Set([...spend.keys(), ...runs.map((r) => r.startedBy ?? SYSTEM)]);
+    const rows = [...who].map((id) => {
+      const mine = runs.filter((r) => (r.startedBy ?? SYSTEM) === id);
+      const finished = mine.filter((r) => !['running', 'reviewing'].includes(r.status));
+      const ok = finished.filter((r) => r.readyAt || ['in_review', 'done'].includes(r.status));
+      const u = people.get(id);
+      return {
+        userId: id, name: id === SYSTEM ? 'Maestro (reviewer, automatic)' : u?.name ?? 'Removed user', roles: u?.roles ?? [], active: id === SYSTEM || (!!u && !u.deactivatedAt),
+        usd: spend.get(id)?.usd ?? 0, usage: spend.get(id)?.usage ?? null, runs: mine.length, successRate: finished.length ? ok.length / finished.length : null,
+      };
+    });
+    const visible = can(user, 'usage.viewAll') ? rows : rows.filter((r) => r.userId === user.id);
+    return visible.sort((a, b) => (b.usage ? b.usage.input + b.usage.output + b.usage.cache : 0) - (a.usage ? a.usage.input + a.usage.output + a.usage.cache : 0) || b.runs - a.runs);
+  };
+  app.get<{ Querystring: Record<string, string | undefined> }>('/api/usage/users', async (req) => {
+    const q = z.object({ days: z.coerce.number().int().min(0).max(3650).default(0), projectId: z.string().optional(), today: z.enum(['1', 'true']).optional() }).parse(req.query);
+    if (q.projectId) seenProject(req.user, q.projectId);
+    const since = q.today ? startOfToday() : q.days > 0 ? new Date(Date.now() - q.days * 86_400_000).toISOString() : '';
+    return usageByUser(req.user!, since, q.projectId);
+  });
+
   /** What you may do, so the dashboard can hide or disable the rest. */
   app.get('/api/me/rights', async (req) => ({ actions: actionsOf(req.user!), seesAllProjects: seesAllProjects(req.user!), table: RIGHTS }));
 
@@ -606,7 +638,7 @@ export async function buildServer(d: ServerDeps): Promise<FastifyInstance> {
 
   // Planner: drafts a backlog you review before any ticket is created
   app.post<{ Params: { id: string } }>('/api/projects/:id/plan', async (req) => {
-    return plan(project(req.params.id));
+    return plan(project(req.params.id), req.user!.id);
   });
   app.get<{ Params: { id: string } }>('/api/projects/:id/drafts', async (req) => d.store.listDrafts(project(req.params.id).id));
   app.patch<{ Params: { id: string } }>('/api/drafts/:id', async (req) => {
@@ -777,10 +809,12 @@ export async function buildServer(d: ServerDeps): Promise<FastifyInstance> {
   app.post<{ Params: { id: string } }>('/api/projects/:id/chat', async (req) => {
     const p = project(req.params.id);
     const { message } = z.object({ message: z.string().min(1) }).parse(req.body);
+    const personal = userOverCap(d.store, req.user!.id);
+    if (personal) throw Object.assign(new Error(personal), { statusCode: 429 });
     const history = d.store.listChat(p.id, 20).map(({ role, content }) => ({ role, content }));
     const tickets = await pmFor(p, d.store, d.secrets).listTickets().catch(() => []);
     const reply = await askAssistant(d, p, tickets, repoDir(p), history, message);
-    d.store.addSpend(p.id, null, 'chat', reply.costUsd, reply.usage);
+    d.store.addSpend(p.id, null, 'chat', reply.costUsd, reply.usage, req.user!.id);
     d.store.addChatMessage(p.id, 'user', message, null, req.user!.id);
     const answer = d.store.addChatMessage(p.id, 'assistant', reply.answer, reply.model);
     answer.actions = allowedProposals(req.user, reply.actions).map((action) => d.store.addChatAction(p.id, answer.id, { type: action.type, summary: describeAction(action), action }, req.user!.id));
@@ -880,6 +914,8 @@ export async function buildServer(d: ServerDeps): Promise<FastifyInstance> {
   /** Asks in a conversation; without a threadId a new conversation starts. Its title comes from the first question. */
   app.post('/api/chat', async (req) => {
     const { message, projectId, threadId } = z.object({ message: z.string().min(1), projectId: z.string().nullable().optional(), threadId: z.string().optional() }).parse(req.body);
+    const personal = userOverCap(d.store, req.user!.id);
+    if (personal) throw Object.assign(new Error(personal), { statusCode: 429 });
     if (projectId) seenProject(req.user, projectId);
     let t = threadId ? thread(threadId, req.user) : d.store.createThread({ projectId: projectId ?? null, userId: req.user!.id });
     if (projectId !== undefined && (projectId ?? null) !== t.projectId) t = d.store.updateThread(t.id, { projectId: projectId ?? null })!;
@@ -892,7 +928,7 @@ export async function buildServer(d: ServerDeps): Promise<FastifyInstance> {
     );
     const reply = await askGlobalAssistant(d, digests, scope, scope ? repoDir(scope) : '', history, message, chatChoice(t) ?? undefined);
     // Questions across all projects count toward the overall spend, not a project's budget.
-    d.store.addSpend(scope ? scope.id : GLOBAL, null, 'chat', reply.costUsd, reply.usage);
+    d.store.addSpend(scope ? scope.id : GLOBAL, null, 'chat', reply.costUsd, reply.usage, req.user!.id);
     d.store.addChatMessage(key, 'user', message, null, req.user!.id);
     const answer = d.store.addChatMessage(key, 'assistant', reply.answer, reply.model);
     answer.actions = allowedProposals(req.user, reply.actions).map((action) => d.store.addChatAction(key, answer.id, { type: action.type, summary: describeAction(action), action }, req.user!.id));
@@ -968,6 +1004,7 @@ export async function buildServer(d: ServerDeps): Promise<FastifyInstance> {
         today: sumSpent([...spendToday].filter(([id]) => seen.has(id) || (id === GLOBAL && seesAllProjects(req.user!))).map(([, v]) => v)),
         last7Days: sumSpent([...spendWeek].filter(([id]) => seen.has(id) || (id === GLOBAL && seesAllProjects(req.user!))).map(([, v]) => v)),
         perRunCaps: perRunCaps(d.store),
+        byUser: usageByUser(req.user!, today).filter((r) => r.usage || r.usd > 0),
         dailyCapsDefault: dailyCaps(d.store, ''),
       },
       alertsUnread: d.store.listAlerts(50).filter((a) => !a.read && (!a.projectId || seen.has(a.projectId))).length,

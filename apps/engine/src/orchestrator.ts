@@ -15,7 +15,7 @@ import { runGates, type GateResult } from './gates.js';
 import { appendLearnings, extractLearnings, MEMORY_FILE, readMemoryFile, writeMemoryFile } from './memory.js';
 import { git } from './proc.js';
 import type { SecretStore } from './secrets.js';
-import { budgetState, overCaps, perRunCaps, startOfToday } from './budget.js';
+import { budgetState, overCaps, perRunCaps, startOfToday, userOverCap } from './budget.js';
 import { addUsage, toEur, totalTokens, type Usage } from './usage.js';
 import { numberSetting } from './settings.js';
 import { chooseModel } from './agents/providers/config.js';
@@ -107,6 +107,8 @@ export class Orchestrator {
     }
     const budget = budgetState(store, projectId);
     if (budget.over) throw new Error(`${project.name} has reached its daily budget of ${budget.over}. Raise it on the Runs tab or wait until tomorrow.`);
+    const personal = userOverCap(store, opts.startedBy);
+    if (personal) throw new Error(personal);
 
     // From here to the reservation there is no await, so two starts can't both pass these checks.
     const startKey = `${projectId}:${ticket.key}`;
@@ -590,7 +592,8 @@ export class Orchestrator {
     if (!amount && !usage) return;
     const run = this.run(ctx);
     this.d.store.updateRun(ctx.runId, { costUsd: run.costUsd + amount, usage: addUsage(run.usage, usage) });
-    this.d.store.addSpend(ctx.project.id, ctx.runId, kind, amount, usage ?? null);
+    // The worker's tokens count for whoever started the run; the reviewer agent's for Maestro itself.
+    this.d.store.addSpend(ctx.project.id, ctx.runId, kind, amount, usage ?? null, kind === 'reviewer' ? SYSTEM : run.startedBy ?? SYSTEM);
   }
 
   /** Why the run must not spend more, or null. */
