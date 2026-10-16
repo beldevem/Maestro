@@ -91,6 +91,25 @@ describe('database', () => {
     b.close();
   });
 
+  it('turns the one Dashboard conversation into the first of several, keeping its model', () => {
+    const file = join(mkdtempSync(join(tmpdir(), 'maestro-db-')), 'db.sqlite');
+    const a = new Store(file);
+    a.db.exec('PRAGMA user_version = 3');
+    a.db.exec('DROP TABLE chat_threads');
+    a.addChatMessage('', 'user', 'Which tickets are blocked, and why?');
+    const answer = a.addChatMessage('', 'assistant', 'None.');
+    a.addChatAction('', answer.id, { type: 'create_ticket', summary: 'x', action: {} });
+    a.setSetting('chat.model', JSON.stringify({ provider: 'ollama', model: 'gpt-oss:20b' }));
+    a.close();
+    const b = new Store(file);
+    const [t] = b.listThreads();
+    expect(t).toMatchObject({ title: 'Which tickets are blocked, and why?', model: { provider: 'ollama', model: 'gpt-oss:20b' }, messages: 2 });
+    expect(b.listChat(`chat:${t.id}`)[1].actions).toHaveLength(1);
+    expect(b.listChat('')).toEqual([]);
+    expect(b.getSetting('chat.model')).toBeUndefined();
+    b.close();
+  });
+
   it('refuses a database from a newer Maestro', () => {
     const file = join(mkdtempSync(join(tmpdir(), 'maestro-db-')), 'db.sqlite');
     const db = new DatabaseSync(file);

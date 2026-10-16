@@ -18,7 +18,7 @@ import { bus, type BusEvent } from './events.js';
 import { NotReadyError, Orchestrator } from './orchestrator.js';
 import { git } from './proc.js';
 import { budgetState, dailyCaps, perRunCaps, startOfToday } from './budget.js';
-import type { Spent } from './db.js';
+import { threadKey, titleFrom, type ChatThread, type Spent } from './db.js';
 import { addUsage, eurPerUsd } from './usage.js';
 import { DESIGN_DIR } from './adapters/design/index.js';
 import { readBaseMemory } from './memory.js';
@@ -521,24 +521,46 @@ export async function buildServer(d: ServerDeps): Promise<FastifyInstance> {
     return { ok: true };
   });
 
-  // Chat across all projects (stored as the project-less thread); an optional projectId puts one project in focus
+  // Chat across all projects: several conversations, each with its own project focus and model
   const GLOBAL = '';
-  app.get('/api/chat', async () => d.store.listChat(GLOBAL));
-  app.delete('/api/chat', async () => {
-    d.store.clearChat(GLOBAL);
-    d.store.deleteSetting('chat.model');
+  const thread = (id: string) => {
+    const t = d.store.getThread(id);
+    if (!t) throw Object.assign(new Error('Conversation not found.'), { statusCode: 404 });
+    return t;
+  };
+  /** The model a conversation uses: its own choice when that provider still exists, else the Chat role's assignment. */
+  const chatChoice = (t: ChatThread) => (t.model?.provider && getProvider(d.store, t.model.provider) ? t.model : null);
+  const modelSchema = z.object({ provider: z.string().min(1), model: z.string().default('') });
+  const threadPatch = z.object({
+    title: z.string().trim().min(1).max(80).optional(),
+    projectId: z.string().min(1).nullable().optional(),
+    model: modelSchema.nullable().optional(),
+  });
+  const checkThreadPatch = async (body: z.infer<typeof threadPatch>) => {
+    if (body.projectId) project(body.projectId);
+    if (body.model) await checkChoice(body.model);
+  };
+  app.get('/api/chat/threads', async () => d.store.listThreads());
+  app.post('/api/chat/threads', async (req) => {
+    const body = threadPatch.parse(req.body ?? {});
+    await checkThreadPatch(body);
+    return d.store.createThread(body);
+  });
+  app.get<{ Params: { id: string } }>('/api/chat/threads/:id', async (req) => {
+    const t = thread(req.params.id);
+    return { thread: t, messages: d.store.listChat(threadKey(t.id)) };
+  });
+  app.patch<{ Params: { id: string } }>('/api/chat/threads/:id', async (req) => {
+    const t = thread(req.params.id);
+    const body = threadPatch.parse(req.body ?? {});
+    await checkThreadPatch(body);
+    return d.store.updateThread(t.id, body);
+  });
+  app.delete<{ Params: { id: string } }>('/api/chat/threads/:id', async (req) => {
+    d.store.deleteThread(thread(req.params.id).id);
     return { ok: true };
   });
-  /** The model this conversation uses, chosen in the chat; the Chat role's assignment when none was chosen. */
-  const chatChoice = () => {
-    try {
-      const c = JSON.parse(d.store.getSetting('chat.model') ?? 'null') as { provider: string; model: string } | null;
-      return c?.provider && getProvider(d.store, c.provider) ? c : null;
-    } catch {
-      return null;
-    }
-  };
-  app.get('/api/chat/models', async () => {
+  app.get<{ Querystring: { threadId?: string } }>('/api/chat/models', async (req) => {
     const groups = await Promise.all(
       listProviders(d.store).map(async (p) => {
         const hint = p.kind === 'cli' ? 'Slow for chat, and it may not follow the answer format.' : p.kind === 'openai' && p.structuredOutput === 'prompt' ? 'No JSON mode: answers may come out malformed.' : '';
@@ -555,35 +577,32 @@ export async function buildServer(d: ServerDeps): Promise<FastifyInstance> {
         }
       }),
     );
-    return { groups, current: chatChoice(), default: chooseModel(d.store, 'assistant') };
+    const t = req.query.threadId ? d.store.getThread(req.query.threadId) : undefined;
+    return { groups, current: t ? chatChoice(t) : null, default: chooseModel(d.store, 'assistant') };
   });
-  app.put('/api/chat/model', async (req) => {
-    const body = z.object({ provider: z.string(), model: z.string().default('') }).nullable().parse(req.body ?? null);
-    if (!body || !body.provider) {
-      d.store.deleteSetting('chat.model');
-      return { current: null };
-    }
-    await checkChoice(body);
-    d.store.setSetting('chat.model', JSON.stringify(body));
-    return { current: body };
-  });
+  /** Asks in a conversation; without a threadId a new conversation starts. Its title comes from the first question. */
   app.post('/api/chat', async (req) => {
-    const { message, projectId } = z.object({ message: z.string().min(1), projectId: z.string().optional() }).parse(req.body);
-    const scope = projectId ? project(projectId) : null;
-    const history = d.store.listChat(GLOBAL, 20).map(({ role, content }) => ({ role, content }));
+    const { message, projectId, threadId } = z.object({ message: z.string().min(1), projectId: z.string().nullable().optional(), threadId: z.string().optional() }).parse(req.body);
+    if (projectId) project(projectId);
+    let t = threadId ? thread(threadId) : d.store.createThread({ projectId: projectId ?? null });
+    if (projectId !== undefined && (projectId ?? null) !== t.projectId) t = d.store.updateThread(t.id, { projectId: projectId ?? null })!;
+    const scope = t.projectId ? project(t.projectId) : null;
+    const key = threadKey(t.id);
+    const history = d.store.listChat(key, 20).map(({ role, content }) => ({ role, content }));
     const digests = await Promise.all(
       d.store.listProjects().map(async (p) => ({ project: p, tickets: await pmFor(p, d.store, d.secrets).listTickets().catch(() => []) })),
     );
-    const reply = await askGlobalAssistant(d, digests, scope, scope ? repoDir(scope) : '', history, message, chatChoice() ?? undefined);
+    const reply = await askGlobalAssistant(d, digests, scope, scope ? repoDir(scope) : '', history, message, chatChoice(t) ?? undefined);
     // Questions across all projects count toward the overall spend, not a project's budget.
     d.store.addSpend(scope ? scope.id : GLOBAL, null, 'chat', reply.costUsd, reply.usage);
-    d.store.addChatMessage(GLOBAL, 'user', message);
-    const answer = d.store.addChatMessage(GLOBAL, 'assistant', reply.answer, reply.model);
-    answer.actions = reply.actions.map((action) => d.store.addChatAction(GLOBAL, answer.id, { type: action.type, summary: describeAction(action), action }));
-    return { ...answer, answer: reply.answer, costUsd: reply.costUsd, usage: reply.usage };
+    d.store.addChatMessage(key, 'user', message);
+    const answer = d.store.addChatMessage(key, 'assistant', reply.answer, reply.model);
+    answer.actions = reply.actions.map((action) => d.store.addChatAction(key, answer.id, { type: action.type, summary: describeAction(action), action }));
+    const updated = d.store.updateThread(t.id, { ...(t.messages === 0 && t.title === 'New chat' ? { title: titleFrom(message) } : {}), touch: true })!;
+    return { ...answer, answer: reply.answer, costUsd: reply.costUsd, usage: reply.usage, thread: updated };
   });
   app.post<{ Params: { actionId: string } }>('/api/chat/actions/:actionId', async (req) => {
-    const stored = d.store.getChatAction(GLOBAL, req.params.actionId);
+    const stored = d.store.getThreadAction(req.params.actionId);
     const fresh = stored && Date.now() - new Date(stored.createdAt).getTime() < PROPOSAL_TTL_MS;
     if (!stored || !fresh || !d.store.claimChatAction(stored.id, 'done')) {
       throw Object.assign(new Error('This proposal has expired or was already used. Ask again.'), { statusCode: 404 });
@@ -598,7 +617,7 @@ export async function buildServer(d: ServerDeps): Promise<FastifyInstance> {
     }
   });
   app.delete<{ Params: { actionId: string } }>('/api/chat/actions/:actionId', async (req) => {
-    const stored = d.store.getChatAction(GLOBAL, req.params.actionId);
+    const stored = d.store.getThreadAction(req.params.actionId);
     if (stored && d.store.claimChatAction(stored.id, 'dismissed')) d.store.finishChatAction(stored.id, 'dismissed', 'Dismissed');
     return { ok: true };
   });

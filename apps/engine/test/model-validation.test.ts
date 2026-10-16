@@ -47,7 +47,8 @@ describe('model validation on the API', () => {
     expect(roles.statusCode).toBe(400);
     expect(roles.json().error).toMatch(/doesn't offer/);
     expect((await app.inject({ method: 'PUT', url: '/api/roles', payload: { worker: { provider: 'claude', model: 'claude-haiku-4-5-20251001' } } })).statusCode).toBe(200);
-    expect((await app.inject({ method: 'PUT', url: '/api/chat/model', payload: { provider: 'claude', model: 'gpt-oss:20b' } })).statusCode).toBe(400);
+    const t = (await app.inject({ method: 'POST', url: '/api/chat/threads', payload: {} })).json();
+    expect((await app.inject({ method: 'PATCH', url: `/api/chat/threads/${t.id}`, payload: { model: { provider: 'claude', model: 'gpt-oss:20b' } } })).statusCode).toBe(400);
     expect((await app.inject({ method: 'POST', url: '/api/agents', payload: { name: 'W', provider: 'claude', model: 'nope' } })).statusCode).toBe(400);
     const w = (await app.inject({ method: 'POST', url: '/api/agents', payload: { name: 'W', provider: 'claude', model: '' } })).json();
     expect((await app.inject({ method: 'PATCH', url: `/api/agents/${w.id}`, payload: { model: 'nope' } })).statusCode).toBe(400);

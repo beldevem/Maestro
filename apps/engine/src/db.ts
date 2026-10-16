@@ -112,7 +112,45 @@ export const MIGRATIONS: ((db: DatabaseSync) => void)[] = [
       move(r.key, `budget.dailyEur.${(r.key as string).slice('budget.daily.'.length)}`);
     }
   },
+  // 4: the Dashboard chat holds several conversations, each with its own project focus and model.
+  (db) => {
+    db.exec(`CREATE TABLE IF NOT EXISTS chat_threads (
+      id TEXT PRIMARY KEY, title TEXT NOT NULL, project_id TEXT, model TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+    )`);
+    const first = db.prepare("SELECT content, created_at FROM chat_messages WHERE project_id = '' AND role = 'user' ORDER BY id LIMIT 1").get() as Row | undefined;
+    const last = db.prepare("SELECT created_at FROM chat_messages WHERE project_id = '' ORDER BY id DESC LIMIT 1").get() as Row | undefined;
+    if (last) {
+      const id = randomUUID();
+      const model = (db.prepare("SELECT value FROM settings WHERE key = 'chat.model'").get() as Row | undefined)?.value ?? null;
+      db.prepare('INSERT INTO chat_threads (id, title, project_id, model, created_at, updated_at) VALUES (?, ?, NULL, ?, ?, ?)')
+        .run(id, first ? titleFrom(first.content) : 'Conversation', model, first?.created_at ?? last.created_at, last.created_at);
+      db.prepare("UPDATE chat_messages SET project_id = ? WHERE project_id = ''").run(threadKey(id));
+      db.prepare("UPDATE chat_actions SET project_id = ? WHERE project_id = ''").run(threadKey(id));
+    }
+    db.prepare("DELETE FROM settings WHERE key = 'chat.model'").run();
+  },
 ];
+
+/** Where a Dashboard conversation's messages and actions are kept (beside each project's own chat). */
+export const threadKey = (threadId: string) => `chat:${threadId}`;
+
+/** A conversation's title from its first question. */
+export function titleFrom(question: string): string {
+  const line = question.trim().split('\n')[0].replace(/\s+/g, ' ');
+  return line.length > 60 ? `${line.slice(0, 57).trimEnd()}…` : line || 'New chat';
+}
+
+export interface ChatThread {
+  id: string;
+  title: string;
+  /** The project in focus, or null for all projects. */
+  projectId: string | null;
+  /** The model chosen for this conversation, or null for the Chat role's default. */
+  model: { provider: string; model: string } | null;
+  createdAt: string;
+  updatedAt: string;
+  messages: number;
+}
 
 function addColumn(db: DatabaseSync, table: string, column: string, ddl: string): void {
   const cols = db.prepare(`PRAGMA table_info(${table})`).all() as Row[];
@@ -210,6 +248,7 @@ export class Store {
     this.db.prepare('DELETE FROM alerts WHERE project_id = ?').run(id);
     this.db.prepare('DELETE FROM spend WHERE project_id = ?').run(id);
     this.clearChat(id);
+    this.db.prepare('UPDATE chat_threads SET project_id = NULL WHERE project_id = ?').run(id);
     this.db.prepare('DELETE FROM projects WHERE id = ?').run(id);
     this.db.prepare('DELETE FROM manual_tickets WHERE project_id = ?').run(id);
     this.db.prepare('DELETE FROM backlog_drafts WHERE project_id = ?').run(id);
@@ -431,6 +470,40 @@ export class Store {
     this.db.prepare('DELETE FROM chat_messages WHERE project_id = ?').run(projectId);
   }
 
+  // Dashboard conversations
+  createThread(input: { title?: string; projectId?: string | null; model?: ChatThread['model'] } = {}): ChatThread {
+    const t = now();
+    const id = randomUUID();
+    this.db.prepare('INSERT INTO chat_threads (id, title, project_id, model, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)')
+      .run(id, input.title ?? 'New chat', input.projectId ?? null, input.model ? JSON.stringify(input.model) : null, t, t);
+    return this.getThread(id)!;
+  }
+  getThread(id: string): ChatThread | undefined {
+    const row = this.db.prepare(`SELECT t.*, (SELECT COUNT(*) FROM chat_messages m WHERE m.project_id = 'chat:' || t.id) AS n FROM chat_threads t WHERE t.id = ?`).get(id) as Row | undefined;
+    return row ? toThread(row) : undefined;
+  }
+  /** Most recent activity first. */
+  listThreads(): ChatThread[] {
+    return (this.db.prepare(`SELECT t.*, (SELECT COUNT(*) FROM chat_messages m WHERE m.project_id = 'chat:' || t.id) AS n FROM chat_threads t ORDER BY t.updated_at DESC, t.rowid DESC`).all() as Row[]).map(toThread);
+  }
+  updateThread(id: string, patch: { title?: string; projectId?: string | null; model?: ChatThread['model']; touch?: boolean }): ChatThread | undefined {
+    const cur = this.getThread(id);
+    if (!cur) return undefined;
+    const next = { ...cur, ...('title' in patch && patch.title !== undefined ? { title: patch.title } : {}), ...('projectId' in patch ? { projectId: patch.projectId ?? null } : {}), ...('model' in patch ? { model: patch.model ?? null } : {}) };
+    this.db.prepare('UPDATE chat_threads SET title = ?, project_id = ?, model = ?, updated_at = ? WHERE id = ?')
+      .run(next.title, next.projectId, next.model ? JSON.stringify(next.model) : null, patch.touch ? now() : cur.updatedAt, id);
+    return this.getThread(id);
+  }
+  deleteThread(id: string): void {
+    this.clearChat(threadKey(id));
+    this.db.prepare('DELETE FROM chat_threads WHERE id = ?').run(id);
+  }
+  /** A proposal from any Dashboard conversation, with the conversation it belongs to. */
+  getThreadAction(actionId: string): StoredChatAction | undefined {
+    const row = this.db.prepare("SELECT * FROM chat_actions WHERE id = ? AND project_id LIKE 'chat:%'").get(actionId) as Row | undefined;
+    return row ? toChatAction(row) : undefined;
+  }
+
   // Spend ledger: every agent call's cost, so budgets and the overview don't depend on run rows alone
   addSpend(projectId: string, runId: string | null, kind: SpendKind, usd: number, usage: Usage | null = null): void {
     if (!(usd > 0) && !usage) return;
@@ -515,6 +588,15 @@ function toReview(r: Row): Review {
     id: r.id, runId: r.run_id, source: r.source, verdict: r.verdict, summary: r.summary, comments: JSON.parse(r.comments),
     author: r.author ?? null, externalId: r.external_id ?? null, addressed: !!r.addressed, costUsd: r.cost_usd, createdAt: r.created_at,
   };
+}
+function toThread(r: Row): ChatThread {
+  let model: ChatThread['model'] = null;
+  try {
+    model = r.model ? JSON.parse(r.model) : null;
+  } catch {
+    model = null;
+  }
+  return { id: r.id, title: r.title, projectId: r.project_id ?? null, model, createdAt: r.created_at, updatedAt: r.updated_at, messages: Number(r.n ?? 0) };
 }
 function toDraft(r: Row): BacklogDraft {
   return {

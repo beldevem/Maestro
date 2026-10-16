@@ -48,23 +48,28 @@ describe('chat across projects', () => {
     const { app, shop, repo } = await setup(agent);
     const res = (await app.inject({ method: 'POST', url: '/api/chat', payload: { message: 'What is going on?' } })).json();
     expect(res.answer).toBe('Two projects.');
+    // Asking without a conversation starts one, titled from the question.
+    expect(res.thread).toMatchObject({ title: 'What is going on?', projectId: null, messages: 2 });
+    const threadId = res.thread.id;
     expect(agent.tasks[0].systemPrompt).toContain('### Shop');
     expect(agent.tasks[0].systemPrompt).toContain('- SHO-1 [todo] Checkout page');
     expect(agent.tasks[0].systemPrompt).toContain('- BLO-1 [todo] RSS feed');
     expect(agent.tasks[0].allowedTools).toEqual([]);
 
-    await app.inject({ method: 'POST', url: '/api/chat', payload: { message: 'And the shop?', projectId: shop.id } });
+    const second = (await app.inject({ method: 'POST', url: '/api/chat', payload: { message: 'And the shop?', projectId: shop.id, threadId } })).json();
+    expect(second.thread).toMatchObject({ id: threadId, title: 'What is going on?', projectId: shop.id });
     expect(agent.tasks[1].systemPrompt).toContain('### Shop (in focus)');
     expect(agent.tasks[1].cwd).toBe(repo);
     expect(agent.tasks[1].allowedTools).toEqual(['Read', 'Glob', 'Grep']);
     expect(agent.tasks[1].prompt).toContain('User: What is going on?\n\nAssistant: Two projects.\n\nUser: And the shop?');
 
-    const history = (await app.inject({ method: 'GET', url: '/api/chat' })).json();
-    expect(history).toHaveLength(4);
+    const history = (await app.inject({ method: 'GET', url: `/api/chat/threads/${threadId}` })).json();
+    expect(history.messages).toHaveLength(4);
     // The project chats are separate threads.
     expect((await app.inject({ method: 'GET', url: `/api/projects/${shop.id}/chat` })).json()).toEqual([]);
-    await app.inject({ method: 'DELETE', url: '/api/chat' });
-    expect((await app.inject({ method: 'GET', url: '/api/chat' })).json()).toEqual([]);
+    await app.inject({ method: 'DELETE', url: `/api/chat/threads/${threadId}` });
+    expect((await app.inject({ method: 'GET', url: '/api/chat/threads' })).json()).toEqual([]);
+    expect((await app.inject({ method: 'GET', url: `/api/chat/threads/${threadId}` })).statusCode).toBe(404);
     await app.close();
   });
 
@@ -99,25 +104,29 @@ describe('chat across projects', () => {
     store.setSetting('provider.assistant', 'ollama');
     store.setSetting('model.assistant', 'qwen3-coder:30b');
     const first = (await app.inject({ method: 'POST', url: '/api/chat', payload: { message: 'hi' } })).json();
+    const threadId = first.thread.id;
     expect(agent.tasks[0]).toMatchObject({ provider: 'ollama', model: 'qwen3-coder:30b' });
     expect(agent.tasks[0].systemPrompt).toContain('You run on Ollama (local), model qwen3-coder:30b');
     expect(first.model).toBe('Ollama (local) · qwen3-coder:30b');
 
-    expect((await app.inject({ method: 'PUT', url: '/api/chat/model', payload: { provider: 'ghost', model: 'x' } })).statusCode).toBe(400);
-    await app.inject({ method: 'PUT', url: '/api/chat/model', payload: { provider: 'ollama', model: 'gpt-oss:20b' } });
-    await app.inject({ method: 'POST', url: '/api/chat', payload: { message: 'and now?' } });
+    expect((await app.inject({ method: 'PATCH', url: `/api/chat/threads/${threadId}`, payload: { model: { provider: 'ghost', model: 'x' } } })).statusCode).toBe(400);
+    await app.inject({ method: 'PATCH', url: `/api/chat/threads/${threadId}`, payload: { model: { provider: 'ollama', model: 'gpt-oss:20b' } } });
+    await app.inject({ method: 'POST', url: '/api/chat', payload: { message: 'and now?', threadId } });
     expect(agent.tasks[1]).toMatchObject({ provider: 'ollama', model: 'gpt-oss:20b' });
-    const history = (await app.inject({ method: 'GET', url: '/api/chat' })).json();
+    // Another conversation keeps the default model.
+    await app.inject({ method: 'POST', url: '/api/chat', payload: { message: 'fresh start' } });
+    expect(agent.tasks[2]).toMatchObject({ provider: 'ollama', model: 'qwen3-coder:30b' });
+    const history = (await app.inject({ method: 'GET', url: `/api/chat/threads/${threadId}` })).json().messages;
     expect(history.filter((m: { role: string }) => m.role === 'assistant').map((m: { model: string }) => m.model)).toEqual(['Ollama (local) · qwen3-coder:30b', 'Ollama (local) · gpt-oss:20b']);
 
-    const models = (await app.inject({ method: 'GET', url: '/api/chat/models' })).json();
+    const models = (await app.inject({ method: 'GET', url: `/api/chat/models?threadId=${threadId}` })).json();
     expect(models.current).toEqual({ provider: 'ollama', model: 'gpt-oss:20b' });
     expect(models.default).toEqual({ provider: 'ollama', model: 'qwen3-coder:30b' });
     expect(models.groups.find((g: { provider: string }) => g.provider === 'claude').models).toContain('claude-opus-5-5');
     expect(models.groups.find((g: { provider: string }) => g.provider === 'ollama').error).toMatch(/Ollama \(local\) is unreachable .* Is it running\?/);
 
-    await app.inject({ method: 'DELETE', url: '/api/chat' });
-    expect((await app.inject({ method: 'GET', url: '/api/chat/models' })).json().current).toBeNull();
+    await app.inject({ method: 'PATCH', url: `/api/chat/threads/${threadId}`, payload: { model: null } });
+    expect((await app.inject({ method: 'GET', url: `/api/chat/models?threadId=${threadId}` })).json().current).toBeNull();
     await app.close();
   });
 
@@ -126,6 +135,36 @@ describe('chat across projects', () => {
     const { app, shop } = await setup(agent);
     const res = (await app.inject({ method: 'POST', url: '/api/chat', payload: { message: 'plan it', projectId: shop.id } })).json();
     expect(res.actions[0].summary).toBe('Shop: Run the planner to draft a backlog');
+    await app.close();
+  });
+});
+
+describe('conversations', () => {
+  it('creates, lists by last activity, renames, refocuses and deletes conversations', async () => {
+    const { app, shop } = await setup(new FakeAssistant({ text: 'ok' }));
+    const a = (await app.inject({ method: 'POST', url: '/api/chat/threads', payload: {} })).json();
+    expect(a).toMatchObject({ title: 'New chat', projectId: null, model: null, messages: 0 });
+    const b = (await app.inject({ method: 'POST', url: '/api/chat/threads', payload: { projectId: shop.id } })).json();
+    expect(b.projectId).toBe(shop.id);
+    await new Promise((r) => setTimeout(r, 5));
+    await app.inject({ method: 'POST', url: '/api/chat', payload: { message: 'What is blocked in the shop and why is it taking this long to finish?', threadId: a.id } });
+    const list = (await app.inject({ method: 'GET', url: '/api/chat/threads' })).json();
+    expect(list.map((t: { id: string }) => t.id)).toEqual([a.id, b.id]);
+    expect(list[0]).toMatchObject({ title: 'What is blocked in the shop and why is it taking this lon…', messages: 2 });
+
+    const renamed = (await app.inject({ method: 'PATCH', url: `/api/chat/threads/${a.id}`, payload: { title: '  Shop status ', projectId: shop.id } })).json();
+    expect(renamed).toMatchObject({ title: 'Shop status', projectId: shop.id });
+    expect((await app.inject({ method: 'PATCH', url: `/api/chat/threads/${a.id}`, payload: { title: '' } })).statusCode).toBe(400);
+    expect((await app.inject({ method: 'PATCH', url: `/api/chat/threads/${a.id}`, payload: { projectId: 'ghost' } })).statusCode).toBe(404);
+    // A later question keeps its title.
+    await app.inject({ method: 'POST', url: '/api/chat', payload: { message: 'thanks', threadId: a.id } });
+    expect((await app.inject({ method: 'GET', url: `/api/chat/threads/${a.id}` })).json().thread.title).toBe('Shop status');
+
+    // Deleting a project leaves its conversations, focused on all projects.
+    await app.inject({ method: 'DELETE', url: `/api/projects/${shop.id}` });
+    expect((await app.inject({ method: 'GET', url: `/api/chat/threads/${b.id}` })).json().thread.projectId).toBeNull();
+    expect((await app.inject({ method: 'DELETE', url: `/api/chat/threads/${b.id}` })).json()).toEqual({ ok: true });
+    expect((await app.inject({ method: 'DELETE', url: `/api/chat/threads/${b.id}` })).statusCode).toBe(404);
     await app.close();
   });
 });
