@@ -4,6 +4,8 @@ A dashboard on your machine where you link projects to a code host and a PM tool
 
 It covers the whole plan: the board and worker agents, the planner and auto-assign, the reviewer agent and its fix loop, design and docs context, GitHub, GitLab, Bitbucket and local code hosts, chat that proposes actions, project memory, budgets and alerts, metrics, keychain secrets, templates and an optional Docker sandbox.
 
+**New here? Read the [user guide](docs/user-guide.md)**: getting started, roles, every screen, budgets, backups and a troubleshooting table for every error code.
+
 ## What works now
 
 - **Projects** linked to a GitHub, GitLab (cloud or self-managed) or Bitbucket Cloud repo, or a local git folder. Each project has its own context, requirements and best practices, which every agent reads.
