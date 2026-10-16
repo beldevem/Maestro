@@ -76,7 +76,7 @@ describe('activity log', () => {
     const log = store.listAudit();
     const summary = log.map((e) => `${e.userId === ids.pm ? 'pm' : e.userId === ids.dev ? 'dev' : e.userId === ids.lead ? 'lead' : e.userId} ${e.action}`).reverse();
     expect(summary).toEqual([
-      'dev auth.login_failed', 'dev auth.login', 'pm ticket.create', 'dev run.start', 'lead secret.set', 'lead settings.update', 'pm member.add',
+      'dev auth.login_failed', 'dev auth.login', 'pm ticket.create', 'dev run.start', 'system run.review', 'lead secret.set', 'lead settings.update', 'pm member.add',
     ]);
     expect(log.find((e) => e.action === 'secret.set')).toMatchObject({ targetType: 'secret', targetId: 'GITHUB_TOKEN', detail: null });
     expect(log.find((e) => e.action === 'run.start')).toMatchObject({ projectId: p.id, targetId: ticket.key, detail: { ticket: ticket.key, trigger: 'manual' } });
