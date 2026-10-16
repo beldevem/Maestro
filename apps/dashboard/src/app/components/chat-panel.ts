@@ -8,6 +8,7 @@ import type { ChatAction, ChatMessage, ChatModels, ChatThread, Project, Ticket }
 import { renderMarkdown } from '../ui/markdown';
 import { Icon } from '../ui/icon';
 import { Confirm } from '../ui/confirm';
+import { Needs } from '../ui/needs';
 import { Toasts } from '../ui/toast';
 
 interface ContextChip {
@@ -26,7 +27,7 @@ const SUGGESTIONS = [
 /** The assistant across all projects: optional project focus, context chips, confirmable actions. */
 @Component({
   selector: 'app-chat-panel',
-  imports: [FormsModule, RouterLink, DatePipe, Icon],
+  imports: [Needs, FormsModule, RouterLink, DatePipe, Icon],
   template: `
     <section class="chat-panel" aria-label="Ask Maestro">
       <header class="chat-head">
@@ -130,7 +131,7 @@ const SUGGESTIONS = [
                 @case ('failed') { <span class="error">{{ a.result }}</span> }
                 @case ('dismissed') { <span class="muted">Dismissed</span> }
                 @default {
-                  <button class="primary" (click)="confirm(a)"><app-icon name="check" [size]="14" /> Confirm</button>
+                  <button class="primary" [appNeeds]="chatRight(a.type)" (click)="confirm(a)"><app-icon name="check" [size]="14" /> Confirm</button>
                   <button class="quiet" (click)="dismiss(a)">Dismiss</button>
                 }
               }
@@ -174,6 +175,10 @@ export class ChatPanel {
   readonly closed = output<void>();
 
   readonly suggestions = SUGGESTIONS;
+  /** The right confirming a proposal needs (the engine checks it too). */
+  chatRight(type: string): string {
+    return ({ create_ticket: 'ticket.edit', move_ticket: 'ticket.edit', assign: 'run.start', plan_backlog: 'planner.run', pause_agent: 'workers.manage', resume_agent: 'workers.manage' } as Record<string, string>)[type] ?? 'settings.manage';
+  }
   readonly messages = signal<ChatMessage[]>([]);
   readonly loading = signal(true);
   readonly thinking = signal(false);

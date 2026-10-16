@@ -9,20 +9,21 @@ import { RUN_LABEL, STATE_LABEL, type Overview } from '../models';
 import { Icon } from '../ui/icon';
 import { UsageView, describeCaps } from '../ui/usage';
 import { ChatDock } from '../ui/chat-dock';
+import { Needs } from '../ui/needs';
 
 const WHY = { blocked: { icon: 'alert', label: 'Blocked' }, review: { icon: 'pr', label: 'Ready for review' }, failed: { icon: 'x', label: 'Failed today' } } as const;
 
 /** Everything at a glance, plus the assistant. */
 @Component({
   selector: 'app-home',
-  imports: [UsageView, RouterLink, DatePipe, Icon, ChatPanel],
+  imports: [Needs, UsageView, RouterLink, DatePipe, Icon, ChatPanel],
   template: `
     <header class="page-head">
       <div>
         <h1>Dashboard</h1>
         <p class="page-sub">What your agents are doing and what needs you.</p>
       </div>
-      <a class="button primary" routerLink="/projects" [queryParams]="{ new: 1 }"><app-icon name="plus" [size]="16" /> New project</a>
+      <a class="button primary" appNeeds="project.create" routerLink="/projects" [queryParams]="{ new: 1 }"><app-icon name="plus" [size]="16" /> New project</a>
     </header>
 
     @if (dock.state() === 'minimized' && !dock.phone()) {
@@ -110,7 +111,7 @@ const WHY = { blocked: { icon: 'alert', label: 'Blocked' }, review: { icon: 'pr'
                 <app-icon name="folder" [size]="28" />
                 <h2>No projects yet</h2>
                 <p>Link a repository and a place for tickets, then let agents work on them.</p>
-                <a class="button primary" routerLink="/projects" [queryParams]="{ new: 1 }">Create a project</a>
+                <a class="button primary" appNeeds="project.create" routerLink="/projects" [queryParams]="{ new: 1 }">Create a project</a>
               </div>
             }
             <div class="grid">

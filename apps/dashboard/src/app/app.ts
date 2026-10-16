@@ -31,6 +31,7 @@ export class App {
     { path: '/metrics', label: 'Metrics', icon: 'chart' },
     { path: '/alerts', label: 'Alerts', icon: 'bell' },
     { path: '/activity', label: 'Activity', icon: 'clock' },
+    { path: '/users', label: 'Users', icon: 'key' },
     { path: '/settings', label: 'Settings', icon: 'settings' },
   ];
 
@@ -48,7 +49,7 @@ export class App {
   readonly session = inject(Session);
   readonly rights = inject(Rights);
   /** Menu items this user can use (Settings is for Tech Leads). */
-  readonly navItems = computed(() => this.nav.filter((i) => i.path !== '/settings' || this.rights.can('settings.manage') || !this.rights.actions().size));
+  readonly navItems = computed(() => this.nav.filter((i) => !this.rights.actions().size || (i.path !== '/settings' || this.rights.can('settings.manage')) && (i.path !== '/users' || this.rights.can('users.manage'))));
   readonly roleLabel = USER_ROLE_LABEL;
   readonly menuOpen = signal(false);
 

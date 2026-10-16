@@ -16,12 +16,13 @@ import { deletionDetails } from './projects';
 import { UsageView, describeCaps, formatTokens } from '../ui/usage';
 import { ProjectMembers } from '../components/project-members';
 import { People } from '../people';
+import { Needs } from '../ui/needs';
 
 type Tab = 'board' | 'knowledge' | 'workflow' | 'runs' | 'chat' | 'connectors' | 'members';
 
 @Component({
   selector: 'app-project',
-  imports: [FormsModule, RouterLink, DatePipe, ConnectorFields, BacklogDraftPanel, ChatPanel, Icon, ProjectAi, UsageView, ProjectMembers],
+  imports: [Needs, FormsModule, RouterLink, DatePipe, ConnectorFields, BacklogDraftPanel, ChatPanel, Icon, ProjectAi, UsageView, ProjectMembers],
   template: `
     @if (project(); as p) {
       <header class="page-head">
@@ -31,7 +32,7 @@ type Tab = 'board' | 'knowledge' | 'workflow' | 'runs' | 'chat' | 'connectors' |
             <input id="pname" [(ngModel)]="head.name" name="pname" required maxlength="60" />
             <label class="sr-only" for="pdesc">Description</label>
             <input id="pdesc" [(ngModel)]="head.description" name="pdesc" placeholder="Description" />
-            <button class="primary" type="submit" [disabled]="!head.name.trim()">Save</button>
+            <button appNeeds="project.configure" class="primary" type="submit" [disabled]="!head.name.trim()">Save</button>
             <button type="button" class="quiet" (click)="editingHead.set(false)">Cancel</button>
           </form>
         } @else {
@@ -41,8 +42,8 @@ type Tab = 'board' | 'knowledge' | 'workflow' | 'runs' | 'chat' | 'connectors' |
             @if (p.description) { <p class="page-sub">{{ p.description }}</p> }
           </div>
           <div class="row head-actions">
-            <button class="icon-btn" (click)="startHeadEdit(p)" aria-label="Edit name and description" title="Edit name and description"><app-icon name="edit" /></button>
-            <button class="icon-btn" (click)="remove()" aria-label="Delete project" title="Delete project"><app-icon name="trash" /></button>
+            <button appNeeds="project.configure" class="icon-btn" (click)="startHeadEdit(p)" aria-label="Edit name and description"><app-icon name="edit" /></button>
+            <button appNeeds="project.delete" class="icon-btn" (click)="remove()" aria-label="Delete project"><app-icon name="trash" /></button>
           </div>
         }
       </header>
@@ -58,10 +59,10 @@ type Tab = 'board' | 'knowledge' | 'workflow' | 'runs' | 'chat' | 'connectors' |
         @case ('board') {
           <div class="toolbar">
             <button (click)="loadTickets()">Refresh</button>
-            <button class="primary" (click)="showNewTicket.set(!showNewTicket())">{{ showNewTicket() ? 'Cancel' : 'New ticket' }}</button>
-            <button (click)="plan()" [disabled]="planning() || !!draft()" [title]="draft() ? 'Create or discard the current draft first' : ''">Plan backlog</button>
+            <button appNeeds="ticket.edit" class="primary" (click)="showNewTicket.set(!showNewTicket())">{{ showNewTicket() ? 'Cancel' : 'New ticket' }}</button>
+            <button appNeeds="planner.run" (click)="plan()" [disabled]="planning() || !!draft()" [title]="draft() ? 'Create or discard the current draft first' : ''">Plan backlog</button>
             <label class="toggle" title="Assign ready tickets to free workers automatically">
-              <input type="checkbox" [checked]="autoAssign()" (change)="toggleAutoAssign($any($event.target).checked)" /> Auto-assign
+              <input type="checkbox" appNeeds="project.configure" [checked]="autoAssign()" (change)="toggleAutoAssign($any($event.target).checked)" /> Auto-assign
             </label>
           </div>
           @if (planning()) {
@@ -85,7 +86,7 @@ type Tab = 'board' | 'knowledge' | 'workflow' | 'runs' | 'chat' | 'connectors' |
                 </label>
                 <label>Labels <input [(ngModel)]="newTicket.labels" name="labels" placeholder="frontend, bug" /></label>
               </div>
-              <button class="primary" type="submit" [disabled]="!newTicket.title">Create in {{ pmName() }}</button>
+              <button appNeeds="ticket.edit" class="primary" type="submit" [disabled]="!newTicket.title">Create in {{ pmName() }}</button>
             </form>
           }
           @if (ticketError()) { <p class="error">{{ ticketError() }}</p> }
@@ -110,12 +111,12 @@ type Tab = 'board' | 'knowledge' | 'workflow' | 'runs' | 'chat' | 'connectors' |
                         <p class="warn" [title]="t.notReady.join(' ')">Not ready: {{ t.notReady[0] }}</p>
                       }
                       @if (t.blockedBy.length) {
-                        <button class="quiet" (click)="start(t)">Start anyway</button>
+                        <button appNeeds="run.start" class="quiet" (click)="start(t)">Start anyway</button>
                       } @else {
-                        <button (click)="start(t)">{{ t.notReady.length ? 'Start anyway' : 'Assign to agent' }}</button>
+                        <button appNeeds="run.start" (click)="start(t)">{{ t.notReady.length ? 'Start anyway' : 'Assign to agent' }}</button>
                       }
                     } @else if (t.status === 'in_review' && p.pm.provider === 'manual') {
-                      <button (click)="markDone(t)">Mark done</button>
+                      <button appNeeds="ticket.edit" (click)="markDone(t)">Mark done</button>
                     }
                   </article>
                 }
@@ -131,15 +132,15 @@ type Tab = 'board' | 'knowledge' | 'workflow' | 'runs' | 'chat' | 'connectors' |
             <label>Context <textarea [(ngModel)]="p.context" name="context" rows="6" placeholder="What the product is, who uses it, the architecture"></textarea></label>
             <label>Requirements <textarea [(ngModel)]="p.requirements" name="requirements" rows="8"></textarea></label>
             <label>Best practices <textarea [(ngModel)]="p.bestPractices" name="bestPractices" rows="6" placeholder="Coding standards, patterns to use or avoid"></textarea></label>
-            <button class="primary" type="submit">Save</button>
+            <button appNeeds="project.configure" class="primary" type="submit">Save</button>
           </form>
           <form class="panel" (ngSubmit)="saveMemory()">
             <h2>Project memory <span class="mono muted">.maestro/memory.md</span></h2>
             <p class="hint">Learnings agents record after each ticket, kept in the repository and read by every agent. Your edits are committed with the next ticket's change{{ memoryPending() ? '; one is waiting now' : '' }}.</p>
             <textarea class="code" [(ngModel)]="memoryText" name="memory" aria-label="Project memory" rows="12" spellcheck="false" placeholder="Nothing recorded yet."></textarea>
             <div class="row">
-              <button class="primary" type="submit">Save</button>
-              @if (memoryPending()) { <button type="button" class="quiet" (click)="discardMemory()">Discard my edit</button> }
+              <button appNeeds="project.configure" class="primary" type="submit">Save</button>
+              @if (memoryPending()) { <button appNeeds="project.configure" type="button" class="quiet" (click)="discardMemory()">Discard my edit</button> }
             </div>
           </form>
         }
@@ -148,7 +149,7 @@ type Tab = 'board' | 'knowledge' | 'workflow' | 'runs' | 'chat' | 'connectors' |
           <form class="panel" (ngSubmit)="save({ workflowYaml: p.workflowYaml })">
             <p class="hint">Branch naming, Definition of Ready and Done, quality gates and fix attempts.</p>
             <textarea class="code" [(ngModel)]="p.workflowYaml" name="workflow" aria-label="Workflow configuration (YAML)" rows="28" spellcheck="false"></textarea>
-            <button class="primary" type="submit">Save</button>
+            <button appNeeds="project.configure" class="primary" type="submit">Save</button>
           </form>
         }
 
@@ -160,8 +161,8 @@ type Tab = 'board' | 'knowledge' | 'workflow' | 'runs' | 'chat' | 'connectors' |
             <label>Optional daily cap, €
               <input type="number" min="0" step="0.5" [(ngModel)]="budgetEur" name="budgetEur" placeholder="Default from Settings" />
             </label>
-            <button type="submit">Save budget</button>
-            <button type="button" class="quiet" (click)="cleanupWorktrees()" title="Remove the worktree folders of failed, stopped and done runs; branches stay">Remove finished worktrees</button>
+            <button appNeeds="project.configure" type="submit">Save budget</button>
+            <button appNeeds="run.control" type="button" class="quiet" (click)="cleanupWorktrees()" title="Remove the worktree folders of failed, stopped and done runs; branches stay">Remove finished worktrees</button>
             @if (spend(); as s) {
               <span class="meta">Today <app-usage [usage]="s.today.usage" [usd]="s.today.usd" /> (limit {{ describeCaps(s.dailyCaps) }}) · 7 days <app-usage [usage]="s.last7Days.usage" [usd]="s.last7Days.usd" /> · all time <app-usage [usage]="s.total.usage" [usd]="s.total.usd" /></span>
             }
@@ -199,9 +200,9 @@ type Tab = 'board' | 'knowledge' | 'workflow' | 'runs' | 'chat' | 'connectors' |
           <form class="panel" (ngSubmit)="save({ codeHost: p.codeHost, pm: p.pm, design: p.design, docs: p.docs })">
             <app-connector-fields [model]="p" />
             <div class="row">
-              <button class="primary" type="submit">Save connectors</button>
-              <button type="button" (click)="check()">Test connections</button>
-              <button type="button" class="danger" (click)="remove()"><app-icon name="trash" [size]="14" /> Delete project</button>
+              <button appNeeds="project.configure" class="primary" type="submit">Save connectors</button>
+              <button appNeeds="project.configure" type="button" (click)="check()">Test connections</button>
+              <button appNeeds="project.delete" type="button" class="danger" (click)="remove()"><app-icon name="trash" [size]="14" /> Delete project</button>
             </div>
             @for (c of checks(); track c.name) {
               <p [class.ok]="c.ok" [class.error]="!c.ok">{{ c.name }}: {{ c.message }}</p>

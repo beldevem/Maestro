@@ -8,20 +8,21 @@ import { Confirm } from '../ui/confirm';
 import { Icon } from '../ui/icon';
 import { ModelSelect } from '../ui/model-select';
 import { Toasts } from '../ui/toast';
+import { Needs } from '../ui/needs';
 
 const BUSY: AgentState[] = ['working', 'running_checks', 'addressing_review', 'waiting_review'];
 
 /** The workers that implement tickets: add, rename, change model, pause, delete. */
 @Component({
   selector: 'app-agents',
-  imports: [FormsModule, RouterLink, Icon, ModelSelect],
+  imports: [Needs, FormsModule, RouterLink, Icon, ModelSelect],
   template: `
     <header class="page-head">
       <div>
         <h1>Workers</h1>
         <p class="page-sub">Each worker takes one ticket at a time, using its own AI provider or the one set for workers in Settings.</p>
       </div>
-      <button class="primary" (click)="startAdd()"><app-icon name="plus" [size]="16" /> Add worker</button>
+      <button class="primary" appNeeds="workers.manage" (click)="startAdd()"><app-icon name="plus" [size]="16" /> Add worker</button>
     </header>
 
     <div class="summary">
@@ -58,7 +59,7 @@ const BUSY: AgentState[] = ['working', 'running_checks', 'addressing_review', 'w
         <app-icon name="bot" [size]="28" />
         <h2>No workers</h2>
         <p>Add a worker so tickets can be assigned.</p>
-        <button class="primary" (click)="startAdd()">Add worker</button>
+        <button class="primary" appNeeds="workers.manage" (click)="startAdd()">Add worker</button>
       </div>
     }
 
@@ -93,13 +94,13 @@ const BUSY: AgentState[] = ['working', 'running_checks', 'addressing_review', 'w
               <p><a [routerLink]="['/runs', r.id]">{{ r.ticketKey }}: {{ r.ticketTitle }}</a></p>
             }
             <div class="card-actions">
-              @if (a.state === 'available') { <button (click)="act(a, 'pause')"><app-icon name="pause" [size]="14" /> Pause</button> }
-              @if (a.state === 'paused') { <button (click)="act(a, 'resume')"><app-icon name="play" [size]="14" /> Resume</button> }
-              @if (a.state === 'blocked') { <button class="primary" (click)="act(a, 'unblock')">Mark unblocked</button> }
-              @if (a.currentRunId && isBusy(a)) { <button class="danger" (click)="stop(a)">Stop run</button> }
+              @if (a.state === 'available') { <button appNeeds="workers.manage" (click)="act(a, 'pause')"><app-icon name="pause" [size]="14" /> Pause</button> }
+              @if (a.state === 'paused') { <button appNeeds="workers.manage" (click)="act(a, 'resume')"><app-icon name="play" [size]="14" /> Resume</button> }
+              @if (a.state === 'blocked') { <button class="primary" appNeeds="workers.manage" (click)="act(a, 'unblock')">Mark unblocked</button> }
+              @if (a.currentRunId && isBusy(a)) { <button class="danger" appNeeds="run.control" (click)="stop(a)">Stop run</button> }
               <span class="spacer"></span>
-              <button class="icon-btn" (click)="startEdit(a)" [attr.aria-label]="'Edit ' + a.name" title="Edit"><app-icon name="edit" /></button>
-              <button class="icon-btn" (click)="remove(a)" [disabled]="isBusy(a)" [attr.aria-label]="'Delete ' + a.name"
+              <button class="icon-btn" appNeeds="workers.manage" (click)="startEdit(a)" [attr.aria-label]="'Edit ' + a.name"><app-icon name="edit" /></button>
+              <button class="icon-btn" appNeeds="workers.manage" (click)="remove(a)" [disabled]="isBusy(a)" [attr.aria-label]="'Delete ' + a.name"
                 [title]="isBusy(a) ? 'Stop its run before deleting it' : 'Delete'"><app-icon name="trash" /></button>
             </div>
           }

@@ -9,6 +9,7 @@ import { Icon } from '../ui/icon';
 import { Toasts } from '../ui/toast';
 import { ConnectorFields, emptyConnectors, type ConnectorModel } from './connector-fields';
 import { Currency, UsageView, overCaps } from '../ui/usage';
+import { Needs } from '../ui/needs';
 
 type WizardStep = 'basics' | 'code' | 'tickets' | 'context' | 'review';
 const WIZARD: { id: WizardStep; title: string }[] = [
@@ -33,14 +34,14 @@ export function deletionDetails(p: Pick<Project, 'pm'>): string[] {
 /** All projects, with a guided way to add one. */
 @Component({
   selector: 'app-projects',
-  imports: [FormsModule, RouterLink, ConnectorFields, Icon, UsageView],
+  imports: [Needs, FormsModule, RouterLink, ConnectorFields, Icon, UsageView],
   template: `
     <header class="page-head">
       <div>
         <h1>Projects</h1>
         <p class="page-sub">Each project links a repository to where its tickets live.</p>
       </div>
-      @if (!wizard()) { <button class="primary" (click)="startWizard()"><app-icon name="plus" [size]="16" /> New project</button> }
+      @if (!wizard()) { <button class="primary" appNeeds="project.create" (click)="startWizard()"><app-icon name="plus" [size]="16" /> New project</button> }
     </header>
 
     @if (wizard()) {
@@ -121,7 +122,7 @@ export function deletionDetails(p: Pick<Project, 'pm'>): string[] {
         <app-icon name="folder" [size]="28" />
         <h2>No projects yet</h2>
         <p>Link a repository or a local folder and choose where tickets live.</p>
-        <button class="primary" (click)="startWizard()">Create your first project</button>
+        <button class="primary" appNeeds="project.create" (click)="startWizard()">Create your first project</button>
       </div>
     }
 
@@ -150,8 +151,8 @@ export function deletionDetails(p: Pick<Project, 'pm'>): string[] {
               <a class="button" [routerLink]="['/projects', p.id]">Open</a>
               <a class="button quiet" routerLink="/" [queryParams]="{ project: p.id }"><app-icon name="chat" [size]="14" /> Ask</a>
               <span class="spacer"></span>
-              <button class="icon-btn" (click)="startEdit(p)" [attr.aria-label]="'Edit ' + p.name" title="Edit"><app-icon name="edit" /></button>
-              <button class="icon-btn" (click)="remove(p)" [attr.aria-label]="'Delete ' + p.name" title="Delete"><app-icon name="trash" /></button>
+              <button class="icon-btn" appNeeds="project.configure" (click)="startEdit(p)" [attr.aria-label]="'Edit ' + p.name"><app-icon name="edit" /></button>
+              <button class="icon-btn" appNeeds="project.delete" (click)="remove(p)" [attr.aria-label]="'Delete ' + p.name"><app-icon name="trash" /></button>
             </div>
           }
         </article>

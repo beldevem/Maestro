@@ -3,6 +3,7 @@ import { FormsModule } from '@angular/forms';
 import { Api } from '../api';
 import { ROLE_LABEL, type ProvidersInfo, type Role } from '../models';
 import { ModelSelect } from '../ui/model-select';
+import { Needs } from '../ui/needs';
 import { Toasts } from '../ui/toast';
 
 const ROLES: Role[] = ['worker', 'reviewer', 'planner', 'assistant'];
@@ -10,7 +11,7 @@ const ROLES: Role[] = ['worker', 'reviewer', 'planner', 'assistant'];
 /** Which AI this project uses per role, when it differs from the defaults in Settings. */
 @Component({
   selector: 'app-project-ai',
-  imports: [FormsModule, ModelSelect],
+  imports: [Needs, FormsModule, ModelSelect],
   template: `
     <fieldset>
       <legend>AI for this project</legend>
@@ -32,7 +33,7 @@ const ROLES: Role[] = ['worker', 'reviewer', 'planner', 'assistant'];
               } @else { <span class="hint">Uses the default</span> }
             </div>
           }
-          <div class="row"><button class="primary" type="submit" [disabled]="busy()">Save AI choices</button></div>
+          <div class="row"><button class="primary" type="submit" appNeeds="project.configure" [disabled]="busy()">Save AI choices</button></div>
         </form>
       } @else {
         <div class="skeleton" style="height:60px"></div>

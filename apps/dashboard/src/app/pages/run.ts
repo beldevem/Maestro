@@ -8,10 +8,11 @@ import { Confirm } from '../ui/confirm';
 import { CHECKS_LABEL, RUN_LABEL, VERDICT_LABEL, type Review, type Run, type RunEvent } from '../models';
 import { UsageView } from '../ui/usage';
 import { People } from '../people';
+import { Needs } from '../ui/needs';
 
 @Component({
   selector: 'app-run',
-  imports: [UsageView, RouterLink, DatePipe, FormsModule],
+  imports: [Needs, UsageView, RouterLink, DatePipe, FormsModule],
   template: `
     @if (run(); as r) {
       <header class="page-head">
@@ -34,9 +35,9 @@ import { People } from '../people';
       </dl>
       @if (r.error) { <p class="error">{{ r.error }}</p> }
       <div class="row">
-        @if (r.status === 'running') { <button class="danger" (click)="stop()">Stop</button> }
+        @if (r.status === 'running') { <button appNeeds="run.control" class="danger" (click)="stop()">Stop</button> }
         <button (click)="loadDiff()">{{ r.status === 'running' ? 'Show changes so far' : 'Show changes' }}</button>
-        @if (r.status !== 'running') { <button class="quiet" (click)="cleanup()">Remove worktree</button> }
+        @if (r.status !== 'running') { <button appNeeds="run.control" class="quiet" (click)="cleanup()">Remove worktree</button> }
       </div>
       @if (diff()) { <pre class="diff">{{ diff() }}</pre> }
 
@@ -50,11 +51,11 @@ import { People } from '../people';
           }
           <label>{{ r.status === 'blocked' ? 'Guidance' : 'What should change?' }} <textarea [(ngModel)]="feedback" name="feedback" rows="4" placeholder="One point per line"></textarea></label>
           <div class="row">
-            <button type="submit" [disabled]="!feedback.trim() || sending()">{{ r.status === 'blocked' ? 'Send to the worker' : 'Request changes' }}</button>
+            <button appNeeds="run.review" type="submit" [disabled]="!feedback.trim() || sending()">{{ r.status === 'blocked' ? 'Send to the worker' : 'Request changes' }}</button>
             @if (r.status === 'in_review' && !r.prUrl) {
-              <button type="button" class="primary" (click)="merge()" [disabled]="sending()">Approve and merge</button>
+              <button appNeeds="run.merge" type="button" class="primary" (click)="merge()" [disabled]="sending()">Approve and merge</button>
             }
-            <button type="button" [class.primary]="r.status !== 'blocked' && !!r.prUrl" (click)="approve()" [disabled]="sending()">{{ r.prUrl || r.status === 'blocked' ? 'Mark done' : 'Approve, merge myself' }}</button>
+            <button appNeeds="run.review" type="button" [class.primary]="r.status !== 'blocked' && !!r.prUrl" (click)="approve()" [disabled]="sending()">{{ r.prUrl || r.status === 'blocked' ? 'Mark done' : 'Approve, merge myself' }}</button>
           </div>
           @if (reviewError()) { <p class="error">{{ reviewError() }}</p> }
         </form>

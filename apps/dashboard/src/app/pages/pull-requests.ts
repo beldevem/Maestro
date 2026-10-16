@@ -5,17 +5,18 @@ import { Api } from '../api';
 import { Live } from '../live';
 import { CHECKS_LABEL, RUN_LABEL, VERDICT_LABEL, type PullRequestRow } from '../models';
 import { UsageView } from '../ui/usage';
+import { Needs } from '../ui/needs';
 
 /** Every change waiting for or going through review, across projects. */
 @Component({
   selector: 'app-pull-requests',
-  imports: [UsageView, RouterLink],
+  imports: [Needs, UsageView, RouterLink],
   template: `
     <header class="page-head">
       <h1>Pull requests</h1>
       <div class="row">
         <label class="toggle"><input type="checkbox" [checked]="showDone()" (change)="showDone.set($any($event.target).checked)" /> Show finished</label>
-        <button (click)="checkNow()" [disabled]="checking()">{{ checking() ? 'Checking…' : 'Check now' }}</button>
+        <button appNeeds="run.control" (click)="checkNow()" [disabled]="checking()">{{ checking() ? 'Checking…' : 'Check now' }}</button>
       </div>
     </header>
     @if (error()) { <p class="error">{{ error() }}</p> }

@@ -5,11 +5,12 @@ import { Api } from '../api';
 import type { BacklogDraft, BacklogItem } from '../models';
 import { Confirm } from '../ui/confirm';
 import { UsageView } from '../ui/usage';
+import { Needs } from '../ui/needs';
 
 /** The planner's proposed backlog: edit it, then create the tickets or throw it away. */
 @Component({
   selector: 'app-backlog-draft',
-  imports: [UsageView, FormsModule],
+  imports: [Needs, UsageView, FormsModule],
   template: `
     <section class="panel draft">
       <div class="draft-head">
@@ -63,10 +64,10 @@ import { UsageView } from '../ui/usage';
       }
       @if (error()) { <p class="error">{{ error() }}</p> }
       <div class="row">
-        <button class="primary" type="button" (click)="approve()" [disabled]="busy() || items().length === 0">
+        <button class="primary" type="button" appNeeds="planner.run" (click)="approve()" [disabled]="busy() || items().length === 0">
           Create {{ items().length - createdCount() }} tickets in {{ pmName() }}
         </button>
-        <button type="button" (click)="discard()" [disabled]="busy() || started()">Discard</button>
+        <button type="button" appNeeds="planner.run" (click)="discard()" [disabled]="busy() || started()">Discard</button>
         @if (busy()) { <span class="spinner"></span> }
       </div>
     </section>
