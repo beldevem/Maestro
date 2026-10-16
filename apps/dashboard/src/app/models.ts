@@ -415,3 +415,17 @@ export interface UserView {
   createdAt?: string;
   projects?: string[];
 }
+
+/** One entry of the activity log. */
+export interface ActivityEntry {
+  id: number;
+  at: string;
+  userId: string;
+  userName: string;
+  action: string;
+  targetType: string | null;
+  targetId: string | null;
+  projectId: string | null;
+  projectName: string | null;
+  detail: Record<string, unknown> | null;
+}

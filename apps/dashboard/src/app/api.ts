@@ -1,5 +1,5 @@
 import { Injectable } from '@angular/core';
-import type { SessionUser, UserRole, UserView, Agent, Alert, BacklogDraft, Caps, ChatThread, DirListing, Usage, ChatAction, ChatMessage, ChatModels, Choice, Metrics, Overview, ProviderConfig, ProviderView, ProvidersInfo, Role, ProjectTemplate, ProjectSpend, BacklogItem, Project, PullRequestRow, Review, ReviewComment, Run, RunEvent, SecretInfo, Ticket, TicketStatus } from './models';
+import type { ActivityEntry, SessionUser, UserRole, UserView, Agent, Alert, BacklogDraft, Caps, ChatThread, DirListing, Usage, ChatAction, ChatMessage, ChatModels, Choice, Metrics, Overview, ProviderConfig, ProviderView, ProvidersInfo, Role, ProjectTemplate, ProjectSpend, BacklogItem, Project, PullRequestRow, Review, ReviewComment, Run, RunEvent, SecretInfo, Ticket, TicketStatus } from './models';
 
 export class ApiError extends Error {
   constructor(message: string, readonly status: number, readonly reasons: string[] = [], readonly code?: string) {
@@ -121,6 +121,8 @@ export class Api {
   members = (projectId: string) => this.call<{ userId: string; name: string; roles: UserRole[]; addedAt: string }[]>('GET', `/projects/${projectId}/members`);
   addMember = (projectId: string, userId: string) => this.call('PUT', `/projects/${projectId}/members/${userId}`, {});
   removeMember = (projectId: string, userId: string) => this.call('DELETE', `/projects/${projectId}/members/${userId}`);
+  activity = (f: Record<string, string | number | undefined>) =>
+    this.call<ActivityEntry[]>('GET', `/activity?${new URLSearchParams(Object.entries(f).filter(([, v]) => v !== undefined && v !== '').map(([k, v]) => [k, String(v)]))}`);
   currency = () => this.call<{ eurPerUsd: number }>('GET', '/currency');
 
   settings = () => this.call<{ settings: Record<string, string>; secrets: SecretInfo[]; secretsBackend: 'keychain' | 'file' }>('GET', '/settings');

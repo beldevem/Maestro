@@ -537,3 +537,7 @@ input[aria-invalid='true'] { border-color: var(--bad); }
 .member-list li { display: flex; align-items: center; gap: 10px; padding: 8px 4px; border-top: 1px solid var(--border); flex-wrap: wrap; }
 .member-name { font-weight: 600; flex: 1; min-width: 120px; }
 .member-add select { flex: 1; min-width: 0; }
+.activity-filters { flex-wrap: wrap; align-items: flex-end; gap: 10px; }
+.activity-filters label { display: flex; flex-direction: column; gap: 4px; min-width: 140px; }
+.activity-table td { vertical-align: top; }
+.table-scroll { overflow-x: auto; }

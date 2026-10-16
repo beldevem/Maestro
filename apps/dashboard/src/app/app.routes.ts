@@ -16,6 +16,7 @@ export const routes: Routes = [
   { path: 'runs/:id', loadComponent: () => import('./pages/run').then((m) => m.RunPage), canActivate: [signedIn], title: 'Run · Maestro' },
   { path: 'metrics', loadComponent: () => import('./pages/metrics').then((m) => m.MetricsPage), canActivate: [signedIn], title: 'Metrics · Maestro' },
   { path: 'alerts', loadComponent: () => import('./pages/alerts').then((m) => m.AlertsPage), canActivate: [signedIn], title: 'Alerts · Maestro' },
+  { path: 'activity', loadComponent: () => import('./pages/activity').then((m) => m.ActivityPage), canActivate: [signedIn], title: 'Activity · Maestro' },
   { path: 'settings', loadComponent: () => import('./pages/settings').then((m) => m.SettingsPage), canActivate: [signedIn, allowed('settings.manage')], title: 'Settings · Maestro' },
   { path: '**', redirectTo: '' },
 ];

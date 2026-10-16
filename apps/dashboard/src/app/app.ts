@@ -30,6 +30,7 @@ export class App {
     { path: '/pull-requests', label: 'Pull requests', icon: 'pr' },
     { path: '/metrics', label: 'Metrics', icon: 'chart' },
     { path: '/alerts', label: 'Alerts', icon: 'bell' },
+    { path: '/activity', label: 'Activity', icon: 'clock' },
     { path: '/settings', label: 'Settings', icon: 'settings' },
   ];
 
