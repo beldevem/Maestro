@@ -302,6 +302,7 @@ export class Store {
     this.db.prepare('DELETE FROM spend WHERE project_id = ?').run(id);
     this.clearChat(id);
     this.db.prepare('UPDATE chat_threads SET project_id = NULL WHERE project_id = ?').run(id);
+    this.db.prepare('DELETE FROM project_members WHERE project_id = ?').run(id);
     this.db.prepare('DELETE FROM projects WHERE id = ?').run(id);
     this.db.prepare('DELETE FROM manual_tickets WHERE project_id = ?').run(id);
     this.db.prepare('DELETE FROM backlog_drafts WHERE project_id = ?').run(id);
@@ -567,6 +568,23 @@ export class Store {
     this.db.prepare("UPDATE runs SET run_trigger = 'manual' WHERE run_trigger IS NULL").run();
     const t = now();
     for (const p of this.listProjects()) this.db.prepare('INSERT OR IGNORE INTO project_members (project_id, user_id, added_by, added_at) VALUES (?, ?, ?, ?)').run(p.id, userId, userId, t);
+  }
+
+  // Project members
+  isMember(projectId: string, userId: string): boolean {
+    return !!this.db.prepare('SELECT 1 FROM project_members WHERE project_id = ? AND user_id = ?').get(projectId, userId);
+  }
+  memberProjectIds(userId: string): Set<string> {
+    return new Set((this.db.prepare('SELECT project_id FROM project_members WHERE user_id = ?').all(userId) as Row[]).map((r) => r.project_id as string));
+  }
+  listMembers(projectId: string): { userId: string; addedBy: string | null; addedAt: string }[] {
+    return (this.db.prepare('SELECT * FROM project_members WHERE project_id = ? ORDER BY added_at').all(projectId) as Row[]).map((r) => ({ userId: r.user_id, addedBy: r.added_by ?? null, addedAt: r.added_at }));
+  }
+  addMember(projectId: string, userId: string, addedBy: string | null): void {
+    this.db.prepare('INSERT OR IGNORE INTO project_members (project_id, user_id, added_by, added_at) VALUES (?, ?, ?, ?)').run(projectId, userId, addedBy, now());
+  }
+  removeMember(projectId: string, userId: string): void {
+    this.db.prepare('DELETE FROM project_members WHERE project_id = ? AND user_id = ?').run(projectId, userId);
   }
 
   // Sessions: only a hash of the cookie's id is stored

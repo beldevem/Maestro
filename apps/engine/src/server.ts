@@ -24,6 +24,8 @@ import { checkFolder, listDirs } from './fsbrowse.js';
 import { verifyPassword } from './auth/passwords.js';
 import type { SessionUser } from './auth/roles.js';
 import { Auth, AuthError, clearedCookie, COOKIE, readCookie, sessionCookie, sessionUser } from './auth/sessions.js';
+import { actionsOf, can, CHAT_ACTION_RIGHTS, neededRoles, RIGHTS, seesAllProjects, type Action } from './auth/policy.js';
+import { ROUTE_RULES, type Scope } from './auth/routes.js';
 import { DESIGN_DIR } from './adapters/design/index.js';
 import { readBaseMemory } from './memory.js';
 import { testConnection } from './connection-tests.js';
@@ -128,6 +130,12 @@ function hostnameOf(hostHeader: string | undefined): string {
 
 export async function buildServer(d: ServerDeps): Promise<FastifyInstance> {
   const app = Fastify({ logger: false });
+  // Every route, as "METHOD /path", so a test can check that each has a permission rule.
+  const routes: string[] = [];
+  app.addHook('onRoute', (o) => {
+    for (const m of [o.method].flat()) if (m !== 'HEAD' && o.url.startsWith('/api/')) routes.push(`${m} ${o.url}`);
+  });
+  app.decorate('maestroRoutes', routes);
   await app.register(cors, { origin: [/^http:\/\/localhost:\d+$/, /^http:\/\/127\.0\.0\.1:\d+$/] });
 
   // The engine can run commands on this machine, so only this machine may drive it:
@@ -171,6 +179,33 @@ export async function buildServer(d: ServerDeps): Promise<FastifyInstance> {
     }
   });
   const secure = (req: { protocol: string }) => req.protocol === 'https';
+
+  // What they may do: every API route has a rule (ROUTE_RULES); a route without one is refused.
+  const projectOf = (scope: Scope | undefined, params: Record<string, string>): string | null => {
+    if (!scope || !params.id) return null;
+    if (scope === 'project') return params.id;
+    if (scope === 'run') return d.store.getRun(params.id)?.projectId ?? null;
+    return d.store.getDraft(params.id)?.projectId ?? null;
+  };
+  app.addHook('preHandler', async (req, reply) => {
+    const url = req.routeOptions.url;
+    if (!url?.startsWith('/api/')) return;
+    const rule = ROUTE_RULES[`${req.method === 'HEAD' ? 'GET' : req.method} ${url}`];
+    if (!rule) return reply.status(403).send({ error: 'This route has no permission rule.', code: 'forbidden' });
+    if (rule.action === 'public' || rule.action === 'session') return;
+    const user = req.user!;
+    const projectId = projectOf(rule.scope, req.params as Record<string, string>);
+    if (can(user, rule.action, projectId, d.store)) return;
+    // Someone who could do this, but not in a project they can't see: the project doesn't exist for them.
+    if (projectId && RIGHTS[rule.action].some((r) => user.roles.includes(r))) {
+      return reply.status(404).send({ error: 'Project not found.', code: 'not_found' });
+    }
+    return reply.status(403).send({ error: `This needs ${neededRoles(rule.action)}.`, code: 'forbidden', needs: RIGHTS[rule.action] });
+  });
+  /** Inside a route: refuse unless the user may do `action` (on `projectId`). */
+  const must = (req: { user?: SessionUser }, action: Action, projectId?: string | null) => {
+    if (!can(req.user, action, projectId, d.store)) throw Object.assign(new Error(`This needs ${neededRoles(action)}.`), { statusCode: 403 });
+  };
 
   app.setErrorHandler((err, req, reply) => {
     if (err instanceof z.ZodError) return reply.status(400).send({ error: err.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; ') });
@@ -242,6 +277,15 @@ export async function buildServer(d: ServerDeps): Promise<FastifyInstance> {
     const found = name ? all.find((x) => x.name.toLowerCase() === name) : all.length === 1 ? all[0] : undefined;
     if (!found) throw new Error(name ? `No project called "${'project' in a ? a.project : ''}".` : 'Say which project this is for.');
     return found;
+  };
+  /** The chat only offers what the asker could confirm (a Project Manager never gets agent work). */
+  const allowedProposals = (user: SessionUser | undefined, actions: ProposedAction[]) =>
+    actions.filter((a) => user && RIGHTS[CHAT_ACTION_RIGHTS[a.type] ?? 'settings.manage'].some((r) => user.roles.includes(r)));
+  /** Confirming a chat proposal needs the right to do it, in that project. */
+  const mayConfirm = (user: SessionUser | undefined, scope: ReturnType<typeof project> | null, a: ProposedAction) => {
+    const action = CHAT_ACTION_RIGHTS[a.type];
+    if (!action) throw Object.assign(new Error('Unknown proposal.'), { statusCode: 400 });
+    must({ user }, action, a.type === 'pause_agent' || a.type === 'resume_agent' ? null : actionProject(scope, a).id);
   };
   const runAction = async (scope: ReturnType<typeof project> | null, a: ProposedAction): Promise<{ message: string; runId?: string }> => {
     if (a.type === 'pause_agent' || a.type === 'resume_agent') {
@@ -320,6 +364,9 @@ export async function buildServer(d: ServerDeps): Promise<FastifyInstance> {
     await auth.setPassword(u.id, body.next, { keepSession: req.sessionHash });
     return { user: sessionUser(d.store.getUser(u.id)!) };
   });
+
+  /** What you may do, so the dashboard can hide or disable the rest. */
+  app.get('/api/me/rights', async (req) => ({ actions: actionsOf(req.user!), seesAllProjects: seesAllProjects(req.user!), table: RIGHTS }));
 
   /** Liveness: the process answers. */
   app.get('/api/health', async () => ({ ok: true }));
@@ -586,13 +633,15 @@ export async function buildServer(d: ServerDeps): Promise<FastifyInstance> {
     d.store.addSpend(p.id, null, 'chat', reply.costUsd, reply.usage);
     d.store.addChatMessage(p.id, 'user', message);
     const answer = d.store.addChatMessage(p.id, 'assistant', reply.answer, reply.model);
-    answer.actions = reply.actions.map((action) => d.store.addChatAction(p.id, answer.id, { type: action.type, summary: describeAction(action), action }));
+    answer.actions = allowedProposals(req.user, reply.actions).map((action) => d.store.addChatAction(p.id, answer.id, { type: action.type, summary: describeAction(action), action }));
     return { ...answer, answer: reply.answer, costUsd: reply.costUsd, usage: reply.usage };
   });
   app.post<{ Params: { id: string; actionId: string } }>('/api/projects/:id/chat/actions/:actionId', async (req) => {
     const p = project(req.params.id);
     const stored = d.store.getChatAction(p.id, req.params.actionId);
     const fresh = stored && Date.now() - new Date(stored.createdAt).getTime() < PROPOSAL_TTL_MS;
+    // Checked before the proposal is used up, so a refusal leaves it for someone who may confirm it.
+    if (stored && fresh) mayConfirm(req.user, p, proposedActionSchema.parse(stored.action));
     if (!stored || !fresh || !d.store.claimChatAction(stored.id, 'done')) {
       throw Object.assign(new Error('This proposal has expired or was already used. Ask again.'), { statusCode: 404 });
     }
@@ -688,13 +737,14 @@ export async function buildServer(d: ServerDeps): Promise<FastifyInstance> {
     d.store.addSpend(scope ? scope.id : GLOBAL, null, 'chat', reply.costUsd, reply.usage);
     d.store.addChatMessage(key, 'user', message);
     const answer = d.store.addChatMessage(key, 'assistant', reply.answer, reply.model);
-    answer.actions = reply.actions.map((action) => d.store.addChatAction(key, answer.id, { type: action.type, summary: describeAction(action), action }));
+    answer.actions = allowedProposals(req.user, reply.actions).map((action) => d.store.addChatAction(key, answer.id, { type: action.type, summary: describeAction(action), action }));
     const updated = d.store.updateThread(t.id, { ...(t.messages === 0 && t.title === 'New chat' ? { title: titleFrom(message) } : {}), touch: true })!;
     return { ...answer, answer: reply.answer, costUsd: reply.costUsd, usage: reply.usage, thread: updated };
   });
   app.post<{ Params: { actionId: string } }>('/api/chat/actions/:actionId', async (req) => {
     const stored = d.store.getThreadAction(req.params.actionId);
     const fresh = stored && Date.now() - new Date(stored.createdAt).getTime() < PROPOSAL_TTL_MS;
+    if (stored && fresh) mayConfirm(req.user, null, proposedActionSchema.parse(stored.action));
     if (!stored || !fresh || !d.store.claimChatAction(stored.id, 'done')) {
       throw Object.assign(new Error('This proposal has expired or was already used. Ask again.'), { statusCode: 404 });
     }
@@ -1002,7 +1052,24 @@ export async function buildServer(d: ServerDeps): Promise<FastifyInstance> {
     reply.raw.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive' });
     // Something must be sent for the browser to report the stream as open.
     reply.raw.write(': connected\n\n');
-    const send = (e: BusEvent) => reply.raw.write(`data: ${JSON.stringify(e)}\n\n`);
+    const user = req.user!;
+    const runProject = new Map<string, string | null>();
+    /** The project an event is about; null for things everyone sees (workers, alerts with no project). */
+    const projectOfEvent = (e: BusEvent): string | null => {
+      const x = (e as { run?: { projectId?: string }; event?: { runId?: string }; review?: { runId?: string }; alert?: { projectId?: string | null } });
+      if (e.type === 'run') return x.run?.projectId ?? null;
+      if (e.type === 'alert') return x.alert?.projectId ?? null;
+      const runId = e.type === 'run_event' ? x.event?.runId : e.type === 'review' ? x.review?.runId : undefined;
+      if (!runId) return null;
+      if (!runProject.has(runId)) runProject.set(runId, d.store.getRun(runId)?.projectId ?? null);
+      return runProject.get(runId)!;
+    };
+    // Only events about projects this user can see.
+    const send = (e: BusEvent) => {
+      const projectId = projectOfEvent(e);
+      if (projectId && !can(user, 'project.view', projectId, d.store)) return;
+      reply.raw.write(`data: ${JSON.stringify(e)}\n\n`);
+    };
     const ping = setInterval(() => reply.raw.write(': ping\n\n'), 25_000);
     bus.on('event', send);
     req.raw.on('close', () => {
