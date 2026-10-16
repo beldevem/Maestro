@@ -213,6 +213,18 @@ function toSpent(r: Row): Spent {
   return { usd: r.usd ?? 0, usage: r.known ? { input: Number(r.tin ?? 0), output: Number(r.tout ?? 0), cache: Number(r.tcache ?? 0) } : null };
 }
 
+export interface AuditEntry {
+  id: number;
+  at: string;
+  /** A user id, or "system" for Maestro itself. */
+  userId: string;
+  action: string;
+  targetType: string | null;
+  targetId: string | null;
+  projectId: string | null;
+  detail: Record<string, unknown> | null;
+}
+
 export interface UserRow extends SessionUser {
   passwordHash: string;
   failedLogins: number;
@@ -339,17 +351,17 @@ export class Store {
   }
 
   // Runs
-  createRun(input: Pick<Run, 'projectId' | 'agentId' | 'ticketKey' | 'ticketTitle' | 'branch' | 'worktree'> & { area?: string | null }): Run {
+  createRun(input: Pick<Run, 'projectId' | 'agentId' | 'ticketKey' | 'ticketTitle' | 'branch' | 'worktree'> & { area?: string | null; startedBy?: string | null; trigger?: Run['trigger'] }): Run {
     const r: Run = {
-      ...input, area: input.area ?? null, id: randomUUID(), status: 'running', attempts: 0, costUsd: 0, usage: null, prUrl: null, error: null,
+      ...input, area: input.area ?? null, startedBy: input.startedBy ?? null, trigger: input.trigger ?? 'manual', id: randomUUID(), status: 'running', attempts: 0, costUsd: 0, usage: null, prUrl: null, error: null,
       sessionId: null, baseRef: null, prNumber: null, reviewRounds: 0, checks: null, readyAt: null, startedAt: now(), endedAt: null,
     };
     this.db
       .prepare(
-        `INSERT INTO runs (id, project_id, agent_id, ticket_key, ticket_title, branch, worktree, status, attempts, cost_usd, area, started_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?)`,
+        `INSERT INTO runs (id, project_id, agent_id, ticket_key, ticket_title, branch, worktree, status, attempts, cost_usd, area, started_at, started_by, run_trigger)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?, ?, ?)`,
       )
-      .run(r.id, r.projectId, r.agentId, r.ticketKey, r.ticketTitle, r.branch, r.worktree, r.status, r.area, r.startedAt);
+      .run(r.id, r.projectId, r.agentId, r.ticketKey, r.ticketTitle, r.branch, r.worktree, r.status, r.area, r.startedAt, r.startedBy, r.trigger);
     return r;
   }
   getRun(id: string): Run | undefined {
@@ -572,6 +584,28 @@ export class Store {
     for (const p of this.listProjects()) this.db.prepare('INSERT OR IGNORE INTO project_members (project_id, user_id, added_by, added_at) VALUES (?, ?, ?, ?)').run(p.id, userId, userId, t);
   }
 
+  // Activity log: who did what (never secret values)
+  addAudit(e: { userId: string; action: string; targetType?: string | null; targetId?: string | null; projectId?: string | null; detail?: Record<string, unknown> | null }): void {
+    this.db.prepare('INSERT INTO audit_log (at, user_id, action, target_type, target_id, project_id, detail) VALUES (?, ?, ?, ?, ?, ?, ?)')
+      .run(now(), e.userId, e.action, e.targetType ?? null, e.targetId ?? null, e.projectId ?? null, e.detail && Object.keys(e.detail).length ? JSON.stringify(e.detail) : null);
+  }
+  /** Newest first; `before` is the id to continue below. */
+  listAudit(f: { userId?: string; projectId?: string; projectIds?: Set<string>; action?: string; since?: string; until?: string; before?: number; limit?: number } = {}): AuditEntry[] {
+    const where: string[] = [];
+    const args: (string | number)[] = [];
+    if (f.userId) where.push('user_id = ?') && args.push(f.userId);
+    if (f.projectId) where.push('project_id = ?') && args.push(f.projectId);
+    if (f.action) where.push('(action = ? OR action LIKE ?)') && args.push(f.action, `${f.action}.%`);
+    if (f.since) where.push('at >= ?') && args.push(f.since);
+    if (f.until) where.push('at < ?') && args.push(f.until);
+    if (f.before) where.push('id < ?') && args.push(f.before);
+    const rows = this.db.prepare(`SELECT * FROM audit_log ${where.length ? 'WHERE ' + where.join(' AND ') : ''} ORDER BY id DESC LIMIT ?`).all(...args, Math.min(f.limit ?? 100, 500) * (f.projectIds ? 4 : 1)) as Row[];
+    return rows
+      .map((r) => ({ id: r.id, at: r.at, userId: r.user_id, action: r.action, targetType: r.target_type ?? null, targetId: r.target_id ?? null, projectId: r.project_id ?? null, detail: r.detail ? JSON.parse(r.detail) : null }))
+      .filter((e) => !f.projectIds || !e.projectId || f.projectIds.has(e.projectId))
+      .slice(0, Math.min(f.limit ?? 100, 500));
+  }
+
   // Project members
   isMember(projectId: string, userId: string): boolean {
     return !!this.db.prepare('SELECT 1 FROM project_members WHERE project_id = ? AND user_id = ?').get(projectId, userId);
@@ -719,7 +753,7 @@ function toRun(r: Row): Run {
     branch: r.branch, worktree: r.worktree, status: r.status, attempts: r.attempts, costUsd: r.cost_usd, usage: usageOf(r),
     prUrl: r.pr_url ?? null, error: r.error ?? null, area: r.area ?? null, sessionId: r.session_id ?? null, baseRef: r.base_ref ?? null,
     prNumber: r.pr_number ?? null, reviewRounds: r.review_rounds ?? 0, checks: r.checks ?? null, readyAt: r.ready_at ?? null,
-    startedAt: r.started_at, endedAt: r.ended_at ?? null,
+    startedAt: r.started_at, endedAt: r.ended_at ?? null, startedBy: r.started_by ?? null, trigger: r.run_trigger ?? null,
   };
 }
 function toChatAction(r: Row): StoredChatAction {

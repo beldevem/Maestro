@@ -1,4 +1,5 @@
 import { log } from './log.js';
+import { SYSTEM } from './auth/roles.js';
 import { existsSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { codeHostFor, missingCredentials, type CodeHostAdapter } from './adapters/codehost/index.js';
@@ -89,7 +90,7 @@ export class Orchestrator {
   }
 
   /** Assign a ticket to a worker and start the run in the background. Returns once the run exists. */
-  async start(projectId: string, ticketKey: string, opts: { agentId?: string; force?: boolean } = {}): Promise<Run> {
+  async start(projectId: string, ticketKey: string, opts: { agentId?: string; force?: boolean; startedBy?: string | null; trigger?: Run['trigger'] } = {}): Promise<Run> {
     const { store } = this.d;
     const project = store.getProject(projectId);
     if (!project) throw new Error('Project not found.');
@@ -121,7 +122,7 @@ export class Orchestrator {
     this.starting.add(startKey);
     this.setAgent(agent.id, 'working', null, `Preparing ${ticket.key}`);
     try {
-      return await this.setUpRun(project, wf, pm, ticket, agent);
+      return await this.setUpRun(project, wf, pm, ticket, agent, opts);
     } catch (e) {
       this.setAgent(agent.id, 'available', null, '');
       throw e;
@@ -130,7 +131,7 @@ export class Orchestrator {
     }
   }
 
-  private async setUpRun(project: Project, wf: Workflow, pm: ReturnType<typeof pmFor>, ticket: Ticket, agent: Agent): Promise<Run> {
+  private async setUpRun(project: Project, wf: Workflow, pm: ReturnType<typeof pmFor>, ticket: Ticket, agent: Agent, opts: { startedBy?: string | null; trigger?: Run['trigger'] } = {}): Promise<Run> {
     const { store } = this.d;
     const projectId = project.id;
     const codeHost = this.host(project);
@@ -145,6 +146,7 @@ export class Orchestrator {
     mkdirSync(dir, { recursive: true });
     const run = store.createRun({
       projectId, agentId: agent.id, ticketKey: ticket.key, ticketTitle: ticket.title, branch, worktree: '', area: ticketArea(ticket),
+      startedBy: opts.startedBy ?? null, trigger: opts.trigger ?? 'manual',
     });
     const worktree = join(dir, run.id);
     await git(repoPath, ['worktree', 'add', '-b', branch, worktree, baseRef]);
@@ -235,7 +237,11 @@ export class Orchestrator {
       const area = ticketArea(ticket);
       if (one_per_area && area && busyAreas.has(area)) continue;
       try {
-        started.push(await this.start(project.id, ticket.key));
+        // An auto-assigned run counts as the work of whoever switched auto-assign on.
+        const by = store.getSetting(`autoAssignBy.${project.id}`) ?? null;
+        const run = await this.start(project.id, ticket.key, { startedBy: by, trigger: 'auto' });
+        store.addAudit({ userId: by ?? SYSTEM, action: 'run.start', targetType: 'run', targetId: run.id, projectId: project.id, detail: { ticket: ticket.key, trigger: 'auto' } });
+        started.push(run);
         slots -= 1;
         if (area) busyAreas.add(area);
       } catch (e) {
@@ -494,6 +500,7 @@ export class Orchestrator {
         runId: ctx.runId, source: 'agent', verdict: result.verdict, summary: result.summary, comments: result.comments,
         costUsd: result.costUsd, addressed: result.verdict === 'approve',
       });
+      store.addAudit({ userId: SYSTEM, action: 'run.review', targetType: 'run', targetId: ctx.runId, projectId: project.id, detail: { verdict: result.verdict, by: 'reviewer agent' } });
       this.publishReview(review);
       this.log(ctx.runId, 'info', `Reviewer: ${result.verdict === 'approve' ? 'approved' : `requested ${result.comments.length || ''} changes`.replace('  ', ' ')}. ${result.summary}`);
       await this.postReview(ctx, review);

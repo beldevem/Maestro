@@ -113,6 +113,10 @@ export interface Run {
   checks: ChecksState | null;
   /** When the change first became ready for review (PR opened or branch ready). */
   readyAt: string | null;
+  /** Who started it: the user, or for auto-assigned runs the user who switched auto-assign on; null for Maestro itself. */
+  startedBy: string | null;
+  /** How it started. */
+  trigger: 'manual' | 'auto' | 'chat' | null;
   startedAt: string;
   endedAt: string | null;
 }

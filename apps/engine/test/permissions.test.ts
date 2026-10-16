@@ -51,7 +51,7 @@ describe('permissions', () => {
     const rules = Object.keys(ROUTE_RULES);
     expect(routes.filter((r) => !rules.includes(r))).toEqual([]);
     // Rules for routes built in later steps (users, activity, usage) are allowed to wait for them.
-    const later = ['/api/activity', '/api/usage/users'];
+    const later = ['/api/usage/users'];
     expect(rules.filter((r) => !routes.includes(r) && !later.some((l) => r.split(' ')[1].startsWith(l)))).toEqual([]);
     await app.close();
   });

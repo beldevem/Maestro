@@ -61,7 +61,7 @@ describe('token usage', () => {
   });
 
   it('totals tokens per ticket in the metrics', () => {
-    const base = { projectId: 'p', agentId: 'a', branch: 'b', worktree: '', attempts: 0, costUsd: 0, prUrl: null, error: null, area: null, sessionId: null, baseRef: null, prNumber: null, reviewRounds: 0, checks: null, readyAt: null, startedAt: '2026-10-10T00:00:00Z', endedAt: null };
+    const base = { startedBy: null, trigger: 'manual' as const, projectId: 'p', agentId: 'a', branch: 'b', worktree: '', attempts: 0, costUsd: 0, prUrl: null, error: null, area: null, sessionId: null, baseRef: null, prNumber: null, reviewRounds: 0, checks: null, readyAt: null, startedAt: '2026-10-10T00:00:00Z', endedAt: null };
     const runs: Run[] = [
       { ...base, id: 'a', ticketKey: 'T-1', ticketTitle: 'one', status: 'failed', usage: { input: 1000, output: 100, cache: 0 } },
       { ...base, id: 'b', ticketKey: 'T-1', ticketTitle: 'one', status: 'done', usage: { input: 2000, output: 900, cache: 0 } },

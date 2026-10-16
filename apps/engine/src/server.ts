@@ -22,10 +22,11 @@ import { threadKey, titleFrom, type ChatThread, type Spent, type UserRow } from 
 import { addUsage, eurPerUsd } from './usage.js';
 import { checkFolder, listDirs } from './fsbrowse.js';
 import { generatePassword, verifyPassword } from './auth/passwords.js';
-import type { Role, SessionUser } from './auth/roles.js';
+import { SYSTEM, type Role, type SessionUser } from './auth/roles.js';
 import { Auth, AuthError, clearedCookie, COOKIE, readCookie, sessionCookie, sessionUser } from './auth/sessions.js';
 import { actionsOf, can, CHAT_ACTION_RIGHTS, neededRoles, RIGHTS, seesAllProjects, type Action } from './auth/policy.js';
 import { ROUTE_RULES, type Scope } from './auth/routes.js';
+import { AUDIT_RULES, NOT_AUDITED } from './auth/audit.js';
 import { DESIGN_DIR } from './adapters/design/index.js';
 import { readBaseMemory } from './memory.js';
 import { testConnection } from './connection-tests.js';
@@ -211,6 +212,39 @@ export async function buildServer(d: ServerDeps): Promise<FastifyInstance> {
     return all.filter((p) => mine.has(p.id));
   };
   const visibleIds = (user: SessionUser | undefined) => new Set(visibleTo(user).map((p) => p.id));
+  // The activity log: every change that succeeded, with the user behind it (rules in auth/audit.ts).
+  app.addHook('onResponse', async (req, reply) => {
+    const url = req.routeOptions.url;
+    if (!url?.startsWith('/api/') || ['GET', 'HEAD', 'OPTIONS'].includes(req.method)) return;
+    const key = `${req.method} ${url}`;
+    const params = (req.params ?? {}) as Record<string, string>;
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    try {
+      if (key === 'POST /api/auth/login') {
+        // Logins, and refused logins (by email; never the password).
+        const ok = reply.statusCode < 400;
+        const u = typeof body.email === 'string' ? d.store.getUserByEmail(body.email) : undefined;
+        d.store.addAudit({ userId: u?.id ?? 'anonymous', action: ok ? 'auth.login' : 'auth.login_failed', targetType: 'user', targetId: u?.id, detail: ok ? null : { email: String(body.email ?? '').slice(0, 254), status: reply.statusCode, address: req.ip } });
+        return;
+      }
+      if (reply.statusCode >= 400 || NOT_AUDITED.has(key)) return;
+      const rule = AUDIT_RULES[key];
+      const userId = req.user?.id ?? (key === 'POST /api/auth/setup' ? d.store.getUserByEmail(String(body.email ?? ''))?.id : undefined) ?? 'anonymous';
+      const routeRule = ROUTE_RULES[key];
+      const projectId = routeRule?.scope ? projectOf(routeRule.scope, params) : null;
+      d.store.addAudit({
+        userId,
+        action: rule?.action ?? key,
+        targetType: rule?.target ?? null,
+        targetId: (rule?.id ? rule.id(params, body) : params.id) ?? null,
+        projectId: projectId ?? (url.startsWith('/api/projects/:id') ? params.id : null),
+        detail: rule?.detail?.(params, body) ?? null,
+      });
+    } catch (e) {
+      log.error('Could not write the activity log', { route: key, error: e as Error });
+    }
+  });
+
   /** Inside a route: refuse unless the user may do `action` (on `projectId`). */
   const must = (req: { user?: SessionUser }, action: Action, projectId?: string | null) => {
     if (!can(req.user, action, projectId, d.store)) throw Object.assign(new Error(`This needs ${neededRoles(action)}.`), { statusCode: 403 });
@@ -296,7 +330,7 @@ export async function buildServer(d: ServerDeps): Promise<FastifyInstance> {
     if (!action) throw Object.assign(new Error('Unknown proposal.'), { statusCode: 400 });
     must({ user }, action, a.type === 'pause_agent' || a.type === 'resume_agent' ? null : actionProject(scope, a, user).id);
   };
-  const runAction = async (scope: ReturnType<typeof project> | null, a: ProposedAction): Promise<{ message: string; runId?: string }> => {
+  const runAction = async (scope: ReturnType<typeof project> | null, a: ProposedAction, by: string | null = null): Promise<{ message: string; runId?: string }> => {
     if (a.type === 'pause_agent' || a.type === 'resume_agent') {
       const agent = d.store.listAgents().find((x) => x.name.toLowerCase() === a.agentName.toLowerCase());
       if (!agent) throw new Error(`No agent called ${a.agentName}.`);
@@ -311,7 +345,7 @@ export async function buildServer(d: ServerDeps): Promise<FastifyInstance> {
         return { message: `Created ${t.key}.` };
       }
       case 'assign': {
-        const run = await d.orchestrator.start(p.id, a.ticketKey);
+        const run = await d.orchestrator.start(p.id, a.ticketKey, { startedBy: by, trigger: 'chat' });
         return { message: `${a.ticketKey} is assigned to ${d.store.getAgent(run.agentId)?.name ?? 'a worker'}.`, runId: run.id };
       }
       case 'move_ticket':
@@ -455,6 +489,26 @@ export async function buildServer(d: ServerDeps): Promise<FastifyInstance> {
     return { ok: true };
   });
 
+  /** The activity log: everyone's for Project Managers and Tech Leads (in the projects they see), your own otherwise. */
+  app.get<{ Querystring: Record<string, string | undefined> }>('/api/activity', async (req) => {
+    const q = z.object({
+      userId: z.string().optional(), projectId: z.string().optional(), action: z.string().max(60).optional(),
+      since: z.string().datetime().optional(), until: z.string().datetime().optional(),
+      before: z.coerce.number().int().positive().optional(), limit: z.coerce.number().int().min(1).max(500).default(100),
+    }).parse(req.query);
+    const all = can(req.user, 'activity.viewAll');
+    const userId = all ? q.userId : req.user!.id;
+    if (q.projectId) seenProject(req.user, q.projectId);
+    const entries = d.store.listAudit({ ...q, userId, projectIds: seesAllProjects(req.user!) ? undefined : visibleIds(req.user) });
+    const names = new Map(d.store.listUsers().map((u) => [u.id, u.name]));
+    const projectNames = new Map(d.store.listProjects().map((p) => [p.id, p.name]));
+    return entries.map((e) => ({
+      ...e,
+      userName: e.userId === SYSTEM ? 'Maestro' : e.userId === 'anonymous' ? 'Someone (not logged in)' : names.get(e.userId) ?? 'Removed user',
+      projectName: e.projectId ? projectNames.get(e.projectId) ?? 'Removed project' : null,
+    }));
+  });
+
   /** What you may do, so the dashboard can hide or disable the rest. */
   app.get('/api/me/rights', async (req) => ({ actions: actionsOf(req.user!), seesAllProjects: seesAllProjects(req.user!), table: RIGHTS }));
 
@@ -523,7 +577,7 @@ export async function buildServer(d: ServerDeps): Promise<FastifyInstance> {
   });
   app.post<{ Params: { id: string; key: string }; Body: { agentId?: string; force?: boolean } }>(
     '/api/projects/:id/tickets/:key/start',
-    async (req) => d.orchestrator.start(req.params.id, req.params.key, z.object({ agentId: z.string().optional(), force: z.boolean().optional() }).parse(req.body ?? {})),
+    async (req) => d.orchestrator.start(req.params.id, req.params.key, { ...z.object({ agentId: z.string().optional(), force: z.boolean().optional() }).parse(req.body ?? {}), startedBy: req.user!.id, trigger: 'manual' }),
   );
   // Projects without a PM tool have nowhere else to move tickets, e.g. to done after review.
   app.post<{ Params: { id: string; key: string } }>('/api/projects/:id/tickets/:key/status', async (req) => {
@@ -544,6 +598,8 @@ export async function buildServer(d: ServerDeps): Promise<FastifyInstance> {
     const p = project(req.params.id);
     const { enabled } = z.object({ enabled: z.boolean() }).parse(req.body);
     d.store.setSetting(`autoAssign.${p.id}`, String(enabled));
+    // Runs it starts are attributed to whoever switched it on.
+    if (enabled) d.store.setSetting(`autoAssignBy.${p.id}`, req.user!.id);
     if (enabled) void d.orchestrator.tick();
     return { enabled };
   });
@@ -740,7 +796,7 @@ export async function buildServer(d: ServerDeps): Promise<FastifyInstance> {
       throw Object.assign(new Error('This proposal has expired or was already used. Ask again.'), { statusCode: 404 });
     }
     try {
-      const result = await runAction(p, proposedActionSchema.parse(stored.action));
+      const result = await runAction(p, proposedActionSchema.parse(stored.action), req.user!.id);
       d.store.finishChatAction(stored.id, 'done', result.message, result.runId ?? null);
       return result;
     } catch (e) {
@@ -851,7 +907,7 @@ export async function buildServer(d: ServerDeps): Promise<FastifyInstance> {
       throw Object.assign(new Error('This proposal has expired or was already used. Ask again.'), { statusCode: 404 });
     }
     try {
-      const result = await runAction(null, proposedActionSchema.parse(stored.action));
+      const result = await runAction(null, proposedActionSchema.parse(stored.action), req.user!.id);
       d.store.finishChatAction(stored.id, 'done', result.message, result.runId ?? null);
       return result;
     } catch (e) {
@@ -1071,7 +1127,7 @@ export async function buildServer(d: ServerDeps): Promise<FastifyInstance> {
         'model.reviewer': 'claude-opus-5-5',
         ...Object.fromEntries(Object.entries(NUMBER_SETTINGS).map(([k, v]) => [k, String(v.fallback)])),
         // Per-project values (auto-assign toggle, pending memory) have their own endpoints.
-        ...Object.fromEntries(Object.entries(d.store.allSettings()).filter(([k]) => !/^(autoAssign|memory|budget\.daily|budget\.dailyTokens|budget\.dailyEur|roles)\./.test(k) && !['providers', 'chat.model'].includes(k))),
+        ...Object.fromEntries(Object.entries(d.store.allSettings()).filter(([k]) => !/^(autoAssign|autoAssignBy|memory|budget\.daily|budget\.dailyTokens|budget\.dailyEur|roles)\./.test(k) && !['providers', 'chat.model'].includes(k))),
       },
       secrets: KNOWN_SECRETS.map((s) => ({ ...s, set: set.has(s.name) || !!process.env[s.name] })),
       secretsBackend: d.secrets.kind,
