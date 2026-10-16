@@ -117,7 +117,7 @@ describe('auto-assign', () => {
     const two = ticket('Two', ['area:b']);
     const results = await Promise.allSettled([orchestrator.start(project.id, one.key), orchestrator.start(project.id, two.key)]);
     expect(results.map((r) => r.status).sort()).toEqual(['fulfilled', 'rejected']);
-    expect((results.find((r) => r.status === 'rejected') as PromiseRejectedResult).reason.message).toMatch(/No worker agent is available/);
+    expect((results.find((r) => r.status === 'rejected') as PromiseRejectedResult).reason).toMatchObject({ code: "no_free_worker", message: "Every worker is busy or paused." });
     expect(store.listRuns(project.id)).toHaveLength(1);
   });
 

@@ -1,4 +1,4 @@
-import { ADMIN } from './users.js';
+import { ADMIN, gitFolder } from './users.js';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -28,7 +28,7 @@ describe('project templates', () => {
     const secrets = new SecretStore(join(home, 's.json'));
     const agent: CodingAgent = { run: async () => ({ sessionId: null, text: '', costUsd: 0, ok: true }) };
     const app = await buildServer({ actAs: ADMIN, store, secrets, agent, orchestrator: new Orchestrator({ store, secrets, agent, reposDir: home, worktreesDir: home }), reposDir: home });
-    const codeHost = { provider: 'local', localPath: home, defaultBranch: 'main' };
+    const codeHost = { provider: 'local', localPath: gitFolder(), defaultBranch: 'main' };
 
     const list = (await app.inject({ method: 'GET', url: '/api/templates' })).json();
     expect(list.map((t: { id: string }) => t.id)).toEqual(['node-api', 'angular', 'python']);

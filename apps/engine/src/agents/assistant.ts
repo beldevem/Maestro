@@ -8,6 +8,12 @@ import type { CodingAgent } from './coding-agent.js';
 import { projectKnowledge } from './prompts.js';
 import { chooseModel, getProvider, type Choice } from './providers/config.js';
 import { formatTokens, totalTokens, type Usage } from '../usage.js';
+import { AppError } from '../errors.js';
+
+/** An AI call that failed, as an error the chat can show with its code and a hint. */
+export function aiFailed(out: { error?: string; errorCode?: string }, fallback: string): AppError {
+  return new AppError(out.errorCode ?? 'ai_failed', out.error ?? fallback, 502, out.errorCode ? undefined : 'Check Settings → AI providers (use Test) and that the model is reachable.');
+}
 
 /** "Ollama (local) · qwen3-coder:30b" */
 export function modelLabel(store: Store, c: Choice): string {
@@ -148,7 +154,7 @@ Return your reply in the requested structured format.`;
     outputSchema: CHAT_JSON_SCHEMA,
     env: key ? { ANTHROPIC_API_KEY: key } : {},
   });
-  if (!out.ok) throw new Error(out.error ?? 'The assistant could not answer.');
+  if (!out.ok) throw aiFailed(out, 'The assistant could not answer.');
   const data = (out.structured ?? null) as { answer?: unknown; actions?: unknown } | null;
   const model = modelLabel(deps.store, choice);
   if (data && typeof data.answer === 'string') return { answer: data.answer, costUsd: out.costUsd, usage: out.usage ?? null, actions: parseActions(data.actions), model };
@@ -223,7 +229,7 @@ Return your reply in the requested structured format.`;
     outputSchema: CHAT_JSON_SCHEMA,
     env: key ? { ANTHROPIC_API_KEY: key } : {},
   });
-  if (!out.ok) throw new Error(out.error ?? 'The assistant could not answer.');
+  if (!out.ok) throw aiFailed(out, 'The assistant could not answer.');
   const data = (out.structured ?? null) as { answer?: unknown; actions?: unknown } | null;
   const actions = data && typeof data.answer === 'string' ? parseActions(data.actions) : [];
   // Within a scope, ticket actions without a project are for that project.

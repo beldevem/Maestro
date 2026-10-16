@@ -154,7 +154,18 @@ describe('OpenAI-compatible agent loop', () => {
     const { repo, sessions } = workspace();
     const refused = (async () => new Response('bad key', { status: 401 })) as unknown as typeof fetch;
     const r = await new OpenAICompatibleAgent(cfg(), 'bad', sessions, refused).run({ cwd: repo, prompt: 'p', systemPrompt: 's', model: 'm', allowedTools: [] });
-    expect(r).toMatchObject({ ok: false, error: 'Local refused the API key (401).' });
+    expect(r).toMatchObject({ ok: false, errorCode: 'provider_auth', error: 'Local refused the API key (401). Check the key for Local in Settings → AI providers.' });
+    // Each kind of failure gets its own code and a way to fix it.
+    const answer = (status: number, body: string) => (async () => new Response(body, { status })) as unknown as typeof fetch;
+    const run = (f: typeof fetch, model = 'qwen3-coder:30b') => new OpenAICompatibleAgent(cfg(), undefined, sessions, f).run({ cwd: repo, prompt: 'p', systemPrompt: 's', model, allowedTools: [] });
+    expect(await run(answer(404, '{"error":"model \'qwen3-coder:30b\' not found"}'))).toMatchObject({ errorCode: 'model_not_found' });
+    expect((await run(answer(400, 'prompt exceeds the context length'))).errorCode).toBe('context_too_long');
+    expect((await run(answer(429, 'slow down'))).errorCode).toBe('rate_limited');
+    expect((await run(answer(503, 'overloaded'))).errorCode).toBe('provider_unavailable');
+    const down = (async () => { throw Object.assign(new TypeError('fetch failed'), { cause: { code: 'ECONNREFUSED' } }); }) as unknown as typeof fetch;
+    expect(await run(down)).toMatchObject({ errorCode: 'unreachable', error: expect.stringMatching(/^Local could not be reached\. Check that the service is running/) });
+    const garbage = (async () => new Response('<html>not json</html>', { status: 200 })) as unknown as typeof fetch;
+    expect((await run(garbage)).errorCode).toBe('provider_bad_answer');
     const noModel = await new OpenAICompatibleAgent(cfg(), undefined, sessions, refused).run({ cwd: repo, prompt: 'p', systemPrompt: 's', model: '', allowedTools: [] });
     expect(noModel.error).toBe('Choose a model for Local in Settings.');
   });

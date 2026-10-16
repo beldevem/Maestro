@@ -2,9 +2,9 @@ import { log, redact } from './log.js';
 import Fastify, { type FastifyInstance } from 'fastify';
 import cors from '@fastify/cors';
 import fastifyStatic from '@fastify/static';
-import { existsSync } from 'node:fs';
+import { existsSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, isAbsolute, join } from 'node:path';
 import { z } from 'zod';
 import { codeHostFor, missingCredentials } from './adapters/codehost/index.js';
 import { pmFor } from './adapters/pm/index.js';
@@ -21,6 +21,8 @@ import { budgetState, dailyCaps, perRunCaps, startOfToday, userOverCap } from '.
 import { threadKey, titleFrom, type ChatThread, type Spent, type UserRow } from './db.js';
 import { addUsage, eurPerUsd } from './usage.js';
 import { checkFolder, listDirs } from './fsbrowse.js';
+import { selfCheck } from './selfcheck.js';
+import { appError, AppError, classify } from './errors.js';
 import { generatePassword, verifyPassword } from './auth/passwords.js';
 import { SYSTEM, type Role, type SessionUser } from './auth/roles.js';
 import { Auth, AuthError, clearedCookie, COOKIE, readCookie, sessionCookie, sessionUser } from './auth/sessions.js';
@@ -251,16 +253,37 @@ export async function buildServer(d: ServerDeps): Promise<FastifyInstance> {
   };
 
   app.setErrorHandler((err, req, reply) => {
-    if (err instanceof z.ZodError) return reply.status(400).send({ error: err.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; ') });
-    if (err instanceof NotReadyError) return reply.status(409).send({ error: err.message, reasons: err.reasons });
-    const status = (err as { statusCode?: number }).statusCode ?? 400;
-    const message = redact(err instanceof Error ? err.message : String(err));
+    if (err instanceof z.ZodError) return reply.status(400).send({ error: err.issues.map((i) => `${i.path.join('.') || 'request'}: ${i.message}`).join('; '), code: 'invalid_input' });
+    if (err instanceof NotReadyError) return reply.status(409).send({ error: err.message, code: 'ticket_not_ready', reasons: err.reasons, hint: 'Fix what is listed, or start it anyway.' });
     if (err instanceof AuthError) return reply.status(err.statusCode).send({ error: err.message, code: err.code });
-    if (status >= 500) log.error('Request failed', { method: req.method, url: req.url.split('?')[0], status, error: message });
-    else log.debug('Request refused', { method: req.method, url: req.url.split('?')[0], status, error: message });
-    return reply.status(status).send({ error: message });
+    // Known kinds of failure get a code and a fix; anything else keeps its own message.
+    const known = classify(err);
+    const status = known?.statusCode ?? (err as { statusCode?: number }).statusCode ?? 400;
+    const message = redact(known?.message ?? (err instanceof Error ? err.message : String(err)));
+    const code = known?.code ?? (status === 404 ? 'not_found' : status === 403 ? 'forbidden' : status === 409 ? 'conflict' : status === 429 ? 'limit_reached' : status >= 500 ? 'internal' : 'invalid_request');
+    if (status >= 500) log.error('Request failed', { method: req.method, url: req.url.split('?')[0], status, code, error: message });
+    else log.debug('Request refused', { method: req.method, url: req.url.split('?')[0], status, code, error: message });
+    return reply.status(status).send({ error: message, code, ...(known?.hint ? { hint: redact(known.hint) } : {}) });
   });
 
+  /** A local folder must exist and be a git repository; remote hosts need their repository name. */
+  const checkCodeHost = (c: z.infer<typeof codeHostSchema>) => {
+    if (c.provider === 'local') {
+      const path = c.localPath?.trim() ?? '';
+      if (!path) throw appError('folder_missing', 'Give the folder of the local repository.', 400, 'Use Browse… next to the folder path.');
+      if (!isAbsolute(path)) throw appError('folder_relative', `${path} is not a full path.`, 400, 'Start it with / (for example /home/you/projects/app), or use Browse….');
+      if (!existsSync(path)) {
+        throw appError('folder_missing', `${path} doesn't exist${existsSync('/.dockerenv') ? ' inside the container' : ''}.`, 400,
+          existsSync('/.dockerenv') ? 'Put the repository under PROJECTS_DIR (mounted in Docker), or mount its folder in docker-compose.override.yml.' : 'Check the path, or use Browse….');
+      }
+      if (!statSync(path).isDirectory()) throw appError('folder_missing', `${path} is a file, not a folder.`, 400);
+      if (!existsSync(join(path, '.git'))) throw appError('not_git_repo', `${path} isn't a git repository.`, 400, 'Run "git init" there and make a first commit, then save again.');
+    } else if (!c.repo?.trim()) {
+      throw appError('repo_missing', `Give the ${c.provider === 'github' ? 'GitHub repository (owner/name)' : c.provider === 'gitlab' ? 'GitLab project path (group/project)' : 'Bitbucket repository (workspace/repo)'}.`, 400);
+    } else if (!/^[\w.-]+(\/[\w.-]+)+$/.test(c.repo.trim())) {
+      throw appError('repo_invalid', `"${c.repo}" doesn't look like a repository path.`, 400, 'Use the form owner/name, as in the repository URL.');
+    }
+  };
   const project = (id: string) => {
     const p = d.store.getProject(id);
     if (!p) throw Object.assign(new Error('Project not found.'), { statusCode: 404 });
@@ -541,6 +564,9 @@ export async function buildServer(d: ServerDeps): Promise<FastifyInstance> {
     return usageByUser(req.user!, since, q.projectId);
   });
 
+  /** What could stop Maestro from working, with how to fix it (Settings → System check). */
+  app.get('/api/system/checks', async () => selfCheck({ store: d.store, secrets: d.secrets, home: dirname(d.reposDir), dashboardDir: d.dashboardDir }));
+
   /** What you may do, so the dashboard can hide or disable the rest. */
   app.get('/api/me/rights', async (req) => ({ actions: actionsOf(req.user!), seesAllProjects: seesAllProjects(req.user!), table: RIGHTS }));
 
@@ -571,8 +597,9 @@ export async function buildServer(d: ServerDeps): Promise<FastifyInstance> {
     }
     if (body.workflowYaml) {
       const v = validateWorkflow(body.workflowYaml);
-      if (!v.ok) throw new Error(`Workflow config: ${v.error}`);
+      if (!v.ok) throw appError('workflow_invalid', `Workflow config: ${v.error}`, 400, 'Fix the YAML on the Workflow tab; the default workflow is in the user guide.');
     }
+    checkCodeHost(body.codeHost);
     return d.store.createProject(body);
   });
   app.get<{ Params: { id: string } }>('/api/projects/:id', async (req) => project(req.params.id));
@@ -585,11 +612,14 @@ export async function buildServer(d: ServerDeps): Promise<FastifyInstance> {
     ) as Partial<z.infer<typeof projectSchema>>;
     if (patch.workflowYaml !== undefined) {
       const v = validateWorkflow(patch.workflowYaml);
-      if (!v.ok) throw new Error(`Workflow config: ${v.error}`);
+      if (!v.ok) throw appError('workflow_invalid', `Workflow config: ${v.error}`, 400, 'Fix the YAML; the default workflow is in the user guide.');
     }
+    if (patch.codeHost) checkCodeHost(patch.codeHost);
     return d.store.updateProject(req.params.id, patch);
   });
   app.delete<{ Params: { id: string } }>('/api/projects/:id', async (req) => {
+    const busy = d.store.listRuns(req.params.id).filter((r) => d.orchestrator.isActive(r.id) || ['running', 'reviewing'].includes(r.status));
+    if (busy.length) throw appError('project_busy', `${busy.length} run${busy.length === 1 ? ' is' : 's are'} still working in this project (${busy.map((r) => r.ticketKey).join(', ')}).`, 409, 'Stop them on the run page first, then delete the project.');
     d.store.deleteProject(req.params.id);
     return { ok: true };
   });
@@ -808,17 +838,21 @@ export async function buildServer(d: ServerDeps): Promise<FastifyInstance> {
   });
   app.post<{ Params: { id: string } }>('/api/projects/:id/chat', async (req) => {
     const p = project(req.params.id);
-    const { message } = z.object({ message: z.string().min(1) }).parse(req.body);
+    const { message } = z.object({ message: z.string().trim().min(1, 'Write a question first.').max(20_000, 'Keep a message under 20,000 characters; attach less context or split it.') }).parse(req.body);
     const personal = userOverCap(d.store, req.user!.id);
     if (personal) throw Object.assign(new Error(personal), { statusCode: 429 });
     const history = d.store.listChat(p.id, 20).map(({ role, content }) => ({ role, content }));
-    const tickets = await pmFor(p, d.store, d.secrets).listTickets().catch(() => []);
+    const warnings: string[] = [];
+    const tickets = await pmFor(p, d.store, d.secrets).listTickets().catch((e: Error) => {
+      warnings.push(`Couldn't read the tickets of ${p.name} (${redact(e.message).slice(0, 160)}), so the answer leaves them out.`);
+      return [];
+    });
     const reply = await askAssistant(d, p, tickets, repoDir(p), history, message);
     d.store.addSpend(p.id, null, 'chat', reply.costUsd, reply.usage, req.user!.id);
     d.store.addChatMessage(p.id, 'user', message, null, req.user!.id);
     const answer = d.store.addChatMessage(p.id, 'assistant', reply.answer, reply.model);
     answer.actions = allowedProposals(req.user, reply.actions).map((action) => d.store.addChatAction(p.id, answer.id, { type: action.type, summary: describeAction(action), action }, req.user!.id));
-    return { ...answer, answer: reply.answer, costUsd: reply.costUsd, usage: reply.usage };
+    return { ...answer, answer: reply.answer, costUsd: reply.costUsd, usage: reply.usage, warnings };
   });
   app.post<{ Params: { id: string; actionId: string } }>('/api/projects/:id/chat/actions/:actionId', async (req) => {
     const p = project(req.params.id);
@@ -913,7 +947,7 @@ export async function buildServer(d: ServerDeps): Promise<FastifyInstance> {
   });
   /** Asks in a conversation; without a threadId a new conversation starts. Its title comes from the first question. */
   app.post('/api/chat', async (req) => {
-    const { message, projectId, threadId } = z.object({ message: z.string().min(1), projectId: z.string().nullable().optional(), threadId: z.string().optional() }).parse(req.body);
+    const { message, projectId, threadId } = z.object({ message: z.string().trim().min(1, 'Write a question first.').max(20_000, 'Keep a message under 20,000 characters; attach less context or split it.'), projectId: z.string().nullable().optional(), threadId: z.string().optional() }).parse(req.body);
     const personal = userOverCap(d.store, req.user!.id);
     if (personal) throw Object.assign(new Error(personal), { statusCode: 429 });
     if (projectId) seenProject(req.user, projectId);
@@ -923,8 +957,15 @@ export async function buildServer(d: ServerDeps): Promise<FastifyInstance> {
     const scope = t.projectId && can(req.user, 'project.view', t.projectId, d.store) ? project(t.projectId) : null;
     const key = threadKey(t.id);
     const history = d.store.listChat(key, 20).map(({ role, content }) => ({ role, content }));
+    const warnings: string[] = [];
     const digests = await Promise.all(
-      visibleTo(req.user).map(async (p) => ({ project: p, tickets: await pmFor(p, d.store, d.secrets).listTickets().catch(() => []) })),
+      visibleTo(req.user).map(async (p) => ({
+        project: p,
+        tickets: await pmFor(p, d.store, d.secrets).listTickets().catch((e: Error) => {
+          warnings.push(`Couldn't read the tickets of ${p.name} (${redact(e.message).slice(0, 160)}), so the answer leaves them out.`);
+          return [];
+        }),
+      })),
     );
     const reply = await askGlobalAssistant(d, digests, scope, scope ? repoDir(scope) : '', history, message, chatChoice(t) ?? undefined);
     // Questions across all projects count toward the overall spend, not a project's budget.
@@ -933,7 +974,7 @@ export async function buildServer(d: ServerDeps): Promise<FastifyInstance> {
     const answer = d.store.addChatMessage(key, 'assistant', reply.answer, reply.model);
     answer.actions = allowedProposals(req.user, reply.actions).map((action) => d.store.addChatAction(key, answer.id, { type: action.type, summary: describeAction(action), action }, req.user!.id));
     const updated = d.store.updateThread(t.id, { ...(t.messages === 0 && t.title === 'New chat' ? { title: titleFrom(message) } : {}), touch: true })!;
-    return { ...answer, answer: reply.answer, costUsd: reply.costUsd, usage: reply.usage, thread: updated };
+    return { ...answer, answer: reply.answer, costUsd: reply.costUsd, usage: reply.usage, thread: updated, warnings };
   });
   app.post<{ Params: { actionId: string } }>('/api/chat/actions/:actionId', async (req) => {
     const stored = d.store.getThreadAction(req.params.actionId, req.user!.id);

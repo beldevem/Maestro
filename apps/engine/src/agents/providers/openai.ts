@@ -7,6 +7,7 @@ import type { ProviderConfig } from './config.js';
 import { parseAllowed, runTool, toolDefinitions } from './tools.js';
 import { httpFetch, modelFetch } from '../../http.js';
 import { addUsage as sumUsage, totalTokens, usageFromOpenAI, type Usage } from '../../usage.js';
+import { AppError, classify, providerError } from '../../errors.js';
 
 interface Message {
   role: 'system' | 'user' | 'assistant' | 'tool';
@@ -106,19 +107,26 @@ export class OpenAICompatibleAgent implements CodingAgent {
 
   private async complete(body: Record<string, unknown>, signal?: AbortSignal): Promise<Completion> {
     const url = `${this.cfg.baseUrl.replace(/\/+$/, '')}/chat/completions`;
-    const res = await this.fetchImpl(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...(this.apiKey ? { Authorization: `Bearer ${this.apiKey}` } : {}) },
-      body: JSON.stringify(body),
-      signal,
-    });
-    if (!res.ok) {
-      const text = (await res.text()).slice(0, 500);
-      if (res.status === 401 || res.status === 403) throw new Error(`${this.cfg.name} refused the API key (${res.status}).`);
-      if (/tool/i.test(text) && res.status === 400) throw new Error(`${this.cfg.name}: this model does not seem to support tool calling (${text}).`);
-      throw new Error(`${this.cfg.name} answered ${res.status}: ${text}`);
+    let res: Response;
+    try {
+      res = await this.fetchImpl(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...(this.apiKey ? { Authorization: `Bearer ${this.apiKey}` } : {}) },
+        body: JSON.stringify(body),
+        signal,
+      });
+    } catch (e) {
+      if (signal?.aborted) throw e;
+      throw classify(e, this.cfg.name) ?? e;
     }
-    return (await res.json()) as Completion;
+    if (!res.ok) throw providerError(this.cfg.name, res.status, (await res.text()).slice(0, 500), String(body.model ?? ''));
+    let data: Completion;
+    try {
+      data = (await res.json()) as Completion;
+    } catch {
+      throw new AppError('provider_bad_answer', `${this.cfg.name} sent an answer Maestro could not read.`, 502, 'Check that the base URL points to an OpenAI-compatible /v1 endpoint.');
+    }
+    return data;
   }
 
   async run(task: AgentTask): Promise<AgentOutcome> {
@@ -214,7 +222,8 @@ export class OpenAICompatibleAgent implements CodingAgent {
       return { sessionId, text, costUsd: cost, usage, ok: true, ...(structured !== undefined ? { structured } : {}) };
     } catch (e) {
       if (task.signal?.aborted) return out({ error: 'aborted' });
-      return out({ error: e instanceof Error ? e.message : String(e) });
+      const known = classify(e, this.cfg.name);
+      return out(known ? { error: `${known.message}${known.hint ? ` ${known.hint}` : ''}`, errorCode: known.code } : { error: e instanceof Error ? e.message : String(e) });
     }
   }
 }

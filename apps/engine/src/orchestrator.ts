@@ -21,6 +21,7 @@ import { numberSetting } from './settings.js';
 import { chooseModel } from './agents/providers/config.js';
 import type { Agent, AgentState, AlertKind, Project, Review, ReviewComment, Run, RunEventKind, SpendKind, Ticket } from './types.js';
 import { blockedBy, branchName, checkReady, commitMessage, parseWorkflow, ticketArea, type Workflow } from './workflow.js';
+import { appError } from './errors.js';
 
 export interface OrchestratorDeps {
   store: Store;
@@ -97,30 +98,35 @@ export class Orchestrator {
     const wf = parseWorkflow(project.workflowYaml);
     const pm = pmFor(project, store, this.d.secrets);
     const ticket = await pm.getTicket(ticketKey);
-    if (!ticket) throw new Error(`Ticket ${ticketKey} not found.`);
+    if (!ticket) throw appError('ticket_not_found', `Ticket ${ticketKey} not found in ${project.name}.`, 404, 'Refresh the board; it may have been moved or deleted in the PM tool.');
 
     const reasons = checkReady(wf, ticket);
     if (reasons.length && !opts.force) throw new NotReadyError(reasons);
     if (!this.d.codeHostFor) {
       const missing = missingCredentials(project, this.d.secrets);
-      if (missing) throw new Error(missing);
+      if (missing) throw appError('credentials_missing', missing, 400, 'Add the token in Settings → Code hosts.');
     }
     const budget = budgetState(store, projectId);
-    if (budget.over) throw new Error(`${project.name} has reached its daily budget of ${budget.over}. Raise it on the Runs tab or wait until tomorrow.`);
+    if (budget.over) throw appError('budget_reached', `${project.name} has reached its daily budget of ${budget.over}.`, 429, 'A Tech Lead can raise it on the project\'s Runs tab; otherwise it resets tomorrow.');
     const personal = userOverCap(store, opts.startedBy);
-    if (personal) throw new Error(personal);
+    if (personal) throw appError('user_budget_reached', personal, 429);
 
     // From here to the reservation there is no await, so two starts can't both pass these checks.
     const startKey = `${projectId}:${ticket.key}`;
-    if (this.busy() >= this.maxConcurrent()) throw new Error(`Already running ${this.busy()} tickets, the limit in Settings.`);
+    if (this.busy() >= this.maxConcurrent()) throw appError('concurrency_limit', `Already running ${this.busy()} tickets, the limit in Settings.`, 409, 'Wait for a run to finish, or raise "Tickets worked on at once" in Settings → Workers and limits.');
     if (this.starting.has(startKey) || store.listRuns(projectId).some((r) => r.ticketKey === ticket.key && ['running', 'reviewing'].includes(r.status))) {
-      throw new Error(`${ticketKey} is already being worked on.`);
+      throw appError('already_running', `${ticketKey} is already being worked on.`, 409, 'Open its run from the board or the Runs tab.');
     }
     const agent = opts.agentId
       ? store.getAgent(opts.agentId)
       : store.listAgents().find((a) => a.role === 'worker' && a.state === 'available');
-    if (!agent) throw new Error('No worker agent is available. Add one on the Agents screen or wait for one to finish.');
-    if (agent.state !== 'available') throw new Error(`${agent.name} is ${agent.state.replace('_', ' ')}.`);
+    if (!agent) {
+      const workers = store.listAgents().filter((a) => a.role === 'worker');
+      throw workers.length
+        ? appError('no_free_worker', 'Every worker is busy or paused.', 409, 'Wait for a run to finish, resume a paused worker, or add a worker on the Workers page.')
+        : appError('no_workers', 'There is no worker to give the ticket to.', 409, 'A Tech Lead can add one on the Workers page.');
+    }
+    if (agent.state !== 'available') throw appError('worker_busy', `${agent.name} is ${agent.state.replace('_', ' ')}.`, 409, 'Pick another worker or wait for this one.');
     this.starting.add(startKey);
     this.setAgent(agent.id, 'working', null, `Preparing ${ticket.key}`);
     try {
@@ -346,7 +352,7 @@ export class Orchestrator {
     this.d.store.updateRun(ctx.runId, { prUrl: pr.url, prNumber: pr.number, readyAt: new Date().toISOString() });
     this.log(ctx.runId, 'info', pr.url ? `Opened pull request ${pr.url}` : `Branch ${run.branch} is ready for review in Maestro.`);
     await pm.moveTicket(ticket.key, 'in_review').catch((e) => this.log(ctx.runId, 'error', `Could not move the ticket: ${e.message}`));
-    await pm.comment(ticket.key, `Maestro: ${pr.url ? `pull request ${pr.url}` : `branch ${run.branch}`} is ready for review.`).catch(() => undefined);
+    await pm.comment(ticket.key, `Maestro: ${pr.url ? `pull request ${pr.url}` : `branch ${run.branch}`} is ready for review.`).catch((e: Error) => this.log(ctx.runId, 'info', `Could not comment on the ticket (${e.message}).`));
   }
 
   /**
@@ -568,7 +574,7 @@ export class Orchestrator {
   private block(ctx: RunCtx, msg: string, note: string, kind: AlertKind = 'blocked'): void {
     this.alert(ctx.project.id, ctx.runId, kind, `${ctx.ticket.key} is blocked: ${msg}`);
     this.log(ctx.runId, 'error', msg);
-    void ctx.pm.comment(ctx.ticket.key, `Maestro: ${msg} The branch ${this.run(ctx).branch} has the work so far.`).catch(() => undefined);
+    void ctx.pm.comment(ctx.ticket.key, `Maestro: ${msg} The branch ${this.run(ctx).branch} has the work so far.`).catch((e: Error) => this.log(ctx.runId, 'info', `Could not comment on the ticket (${e.message}).`));
     this.publishRun(this.d.store.updateRun(ctx.runId, { status: 'blocked', error: msg, endedAt: new Date().toISOString() })!);
     this.setAgent(ctx.agent.id, 'blocked', ctx.runId, note);
   }
@@ -708,14 +714,14 @@ export class Orchestrator {
     if (!project) throw new Error('Project not found.');
     const pm = pmFor(project, store, this.d.secrets);
     await pm.moveTicket(run.ticketKey, 'done').catch((e) => this.log(runId, 'error', `Could not move the ticket: ${e.message}`));
-    await pm.comment(run.ticketKey, `Maestro: ${how === 'merged' ? 'the pull request was merged' : 'approved'}; done.`).catch(() => undefined);
+    await pm.comment(run.ticketKey, `Maestro: ${how === 'merged' ? 'the pull request was merged' : 'approved'}; done.`).catch((e: Error) => this.log(runId, 'info', `Could not comment on the ticket (${e.message}).`));
     store.markReviewsAddressed(store.pendingFeedback(runId).map((r) => r.id));
     const updated = store.updateRun(runId, { status: 'done', error: null, endedAt: new Date().toISOString() })!;
     this.publishRun(updated);
     const agent = store.getAgent(run.agentId);
     if (agent?.currentRunId === runId) this.setAgent(agent.id, 'available', null, '');
     this.log(runId, 'info', how === 'merged' ? 'The pull request was merged. Ticket done.' : 'Approved by you. Ticket done.');
-    await this.cleanup(updated, project).catch(() => undefined);
+    await this.cleanup(updated, project).catch((e: Error) => this.log(runId, 'info', `The worktree could not be removed (${e.message}); remove it from the Runs tab.`));
     return updated;
   }
 

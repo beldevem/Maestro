@@ -6,6 +6,7 @@ import type { BacklogDraft, BacklogItem, Project, Ticket } from '../types.js';
 import type { CodingAgent } from './coding-agent.js';
 import { plannerSystemPrompt, type ExtraKnowledge } from './prompts.js';
 import { chooseModel } from './providers/config.js';
+import { aiFailed } from './assistant.js';
 
 const SIZES = ['XS', 'S', 'M', 'L', 'XL'] as const;
 
@@ -86,7 +87,7 @@ export async function draftBacklog(
     outputSchema: BACKLOG_JSON_SCHEMA,
     env: key ? { ANTHROPIC_API_KEY: key } : {},
   });
-  if (!out.ok) throw new Error(out.error ?? 'The planner stopped without a backlog.');
+  if (!out.ok) throw aiFailed(out, 'The planner stopped without a backlog.');
   return deps.store.createDraft(project.id, parseBacklog(out.structured, out.text), out.costUsd, out.usage ?? null);
 }
 

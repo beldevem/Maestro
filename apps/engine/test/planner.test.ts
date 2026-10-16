@@ -43,11 +43,12 @@ describe('planner and backlog drafts', () => {
   async function setup(agent: CodingAgent) {
     const orchestrator = new Orchestrator({ store, secrets, agent, reposDir: join(home, 'repos'), worktreesDir: join(home, 'wt') });
     const app = await buildServer({ actAs: ADMIN, store, secrets, agent, orchestrator, reposDir: join(home, 'repos') });
-    const res = await app.inject({
-      method: 'POST', url: '/api/projects',
-      payload: { name: 'Greeter', codeHost: { provider: 'local', localPath: join(home, 'missing'), defaultBranch: 'main' }, requirements: 'A CLI that greets the user by name' },
+    // Its folder is gone (deleted after the project was made): the planner works from the requirements alone.
+    const p = store.createProject({
+      name: 'Greeter', description: '', codeHost: { provider: 'local', localPath: join(home, 'missing'), defaultBranch: 'main' }, pm: { provider: 'manual', settings: {} },
+      design: { provider: 'none', settings: {} }, context: '', requirements: 'A CLI that greets the user by name', bestPractices: '',
     });
-    return { app, projectId: res.json().id as string };
+    return { app, projectId: p.id };
   }
 
   it('stores a draft from structured output, with read-only tools and the planner model', async () => {

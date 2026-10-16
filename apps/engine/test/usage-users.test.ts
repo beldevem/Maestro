@@ -82,7 +82,8 @@ describe('usage by user', () => {
     store.setSetting('budget.userDailyTokens', '1000');
     expect((await runTicket('dev', 'First')).statusCode).toBe(200);
     const refused = await runTicket('dev', 'Second');
-    expect(refused.statusCode).toBe(400);
+    expect(refused.statusCode).toBe(429);
+    expect(refused.json().code).toBe('user_budget_reached');
     expect(refused.json().error).toBe('DEV has used their daily budget of 1k tokens. It resets tomorrow, or a Tech Lead can raise it in Settings.');
     const chat = await as('dev')('POST', '/api/chat', { message: 'hi' });
     expect(chat.statusCode).toBe(429);

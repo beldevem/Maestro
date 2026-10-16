@@ -1,6 +1,7 @@
 import { spawnSync } from 'node:child_process';
 import { chmodSync, existsSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { registerSecret } from './log.js';
+import { appError, classify } from './errors.js';
 
 /** Where secret values are kept. */
 interface SecretBackend {
@@ -18,7 +19,11 @@ class FileBackend implements SecretBackend {
 
   read(): Record<string, string> {
     if (!existsSync(this.file)) return {};
-    return JSON.parse(readFileSync(this.file, 'utf8'));
+    try {
+      return JSON.parse(readFileSync(this.file, 'utf8'));
+    } catch (e) {
+      throw classify(e, 'The secrets file') ?? appError('secrets_unreadable', `The secrets file ${this.file} is not valid JSON.`, 500, 'Fix or remove the file (then re-enter your tokens in Settings); a backup copy may be in ~/.maestro/backups.');
+    }
   }
   write(data: Record<string, string>): void {
     writeFileSync(this.file, JSON.stringify(data, null, 2), { mode: 0o600 });

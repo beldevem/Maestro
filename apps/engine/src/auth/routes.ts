@@ -102,6 +102,7 @@ export const ROUTE_RULES: Record<string, RouteRule> = {
   'POST /api/providers/:id/test': r('settings.manage'),
   'PUT /api/roles': r('settings.manage'),
   'GET /api/settings': r('settings.manage'),
+  'GET /api/system/checks': r('settings.manage'),
   'PUT /api/settings': r('settings.manage'),
   'POST /api/settings/test/:provider': r('settings.manage'),
   'PUT /api/secrets/:name': r('settings.manage'),

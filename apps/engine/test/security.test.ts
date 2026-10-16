@@ -1,4 +1,4 @@
-import { ADMIN } from './users.js';
+import { ADMIN, gitFolder } from './users.js';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -13,7 +13,7 @@ import { buildServer } from '../src/server.js';
 describe('request guards', () => {
   let app: FastifyInstance;
   let store: Store;
-  const project = { name: 'X', codeHost: { provider: 'local', localPath: '/tmp', defaultBranch: 'main' } };
+  const project = { name: 'X', codeHost: { provider: 'local', localPath: gitFolder(), defaultBranch: 'main' } };
 
   beforeEach(async () => {
     const home = mkdtempSync(join(tmpdir(), 'maestro-sec-'));

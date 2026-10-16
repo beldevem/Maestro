@@ -37,6 +37,8 @@ export interface AgentOutcome {
   usage?: Usage | null;
   ok: boolean;
   error?: string;
+  /** A stable code for the failure (see errors.ts), when known. */
+  errorCode?: string;
   /** Present when the task had an outputSchema and the agent returned matching output. */
   structured?: unknown;
 }

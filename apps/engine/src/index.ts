@@ -3,7 +3,8 @@ import { fileURLToPath } from 'node:url';
 import { ClaudeCodingAgent } from './agents/coding-agent.js';
 import { migrateProviders } from './agents/providers/config.js';
 import { ProviderRouter } from './agents/providers/router.js';
-import { ensureHome, HOST, paths, PORT } from './config.js';
+import { ensureHome, HOST, MAESTRO_HOME, paths, PORT } from './config.js';
+import { selfCheck } from './selfcheck.js';
 import { IDLE_MS } from './auth/sessions.js';
 import { Store } from './db.js';
 import { log } from './log.js';
@@ -11,9 +12,31 @@ import { Orchestrator } from './orchestrator.js';
 import { SecretStore } from './secrets.js';
 import { buildServer } from './server.js';
 
-ensureHome();
-const store = new Store(paths.db);
-const secrets = SecretStore.open(paths.secrets);
+/** Stops at startup with what went wrong and how to fix it, instead of a stack trace. */
+function fatal(what: string, e: unknown, hint: string): never {
+  log.error(`${what}: ${e instanceof Error ? e.message : String(e)}`);
+  log.error(`How to fix: ${(e as { hint?: string })?.hint ?? hint}`);
+  process.exit(1);
+}
+
+try {
+  ensureHome();
+} catch (e) {
+  fatal(`Maestro can't use its data folder ${MAESTRO_HOME}`, e, 'Check that the folder exists and belongs to the user running Maestro (in Docker: MAESTRO_UID/MAESTRO_GID in .env).');
+}
+let store: Store;
+try {
+  store = new Store(paths.db);
+} catch (e) {
+  fatal(`Maestro can't open its database ${paths.db}`, e, /locked|busy/i.test(String(e)) ? 'Another Maestro engine is using this data folder; stop it first.' : 'Restore a backup of maestro.db (see docs/user-guide.md, Backups), or move the damaged file away to start empty.');
+}
+let secrets: SecretStore;
+try {
+  secrets = SecretStore.open(paths.secrets);
+  secrets.names();
+} catch (e) {
+  fatal("Maestro can't read its secrets", e, `Fix or remove ${paths.secrets}, then re-enter your tokens in Settings.`);
+}
 // Load every secret once, so the logger can mask their values wherever they turn up.
 for (const name of secrets.names()) secrets.get(name);
 log.info(`Secrets are kept in ${secrets.kind === 'keychain' ? 'the system keychain' : paths.secrets}.`);
@@ -32,7 +55,15 @@ if (store.listAgents().length === 0) {
 const here = dirname(fileURLToPath(import.meta.url));
 const dashboardDir = join(here, '../../dashboard/dist/dashboard/browser');
 const app = await buildServer({ store, secrets, agent, orchestrator, reposDir: paths.repos, dashboardDir });
-await app.listen({ port: PORT, host: HOST });
+try {
+  await app.listen({ port: PORT, host: HOST });
+} catch (e) {
+  fatal(`Maestro can't listen on ${HOST}:${PORT}`, e, (e as { code?: string }).code === 'EADDRINUSE' ? `Something else uses port ${PORT}: stop it, or set MAESTRO_PORT to another port.` : 'Check MAESTRO_HOST and MAESTRO_PORT.');
+}
+// What could get in the way, in the log now and in Settings → System check.
+void selfCheck({ store, secrets, home: MAESTRO_HOME, dashboardDir }).then((checks) => {
+  for (const c of checks.filter((x) => x.level !== 'ok')) (c.level === 'error' ? log.error : log.warn)(`${c.label}: ${c.message}${c.hint ? ` ${c.hint}` : ''}`);
+});
 log.info(`Maestro engine on http://${HOST}:${PORT}`, { schema: store.schemaVersion() });
 
 const loops = [
