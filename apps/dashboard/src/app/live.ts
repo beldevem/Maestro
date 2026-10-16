@@ -34,6 +34,16 @@ export class Live {
     };
   }
 
+  /** On logout: close the stream and forget what this user could see. */
+  stop(): void {
+    this.source?.close();
+    this.source = undefined;
+    this.connected.set(false);
+    this.agents.set([]);
+    this.runs.set([]);
+    this.alerts.set([]);
+  }
+
   async refresh(): Promise<void> {
     const [agents, runs, alerts] = await Promise.all([this.api.agents(), this.api.runs(), this.api.alerts().catch(() => ({ alerts: [] }))]);
     this.agents.set(agents);

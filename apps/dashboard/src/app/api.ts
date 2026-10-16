@@ -1,8 +1,8 @@
 import { Injectable } from '@angular/core';
-import type { Agent, Alert, BacklogDraft, Caps, ChatThread, DirListing, Usage, ChatAction, ChatMessage, ChatModels, Choice, Metrics, Overview, ProviderConfig, ProviderView, ProvidersInfo, Role, ProjectTemplate, ProjectSpend, BacklogItem, Project, PullRequestRow, Review, ReviewComment, Run, RunEvent, SecretInfo, Ticket, TicketStatus } from './models';
+import type { SessionUser, Agent, Alert, BacklogDraft, Caps, ChatThread, DirListing, Usage, ChatAction, ChatMessage, ChatModels, Choice, Metrics, Overview, ProviderConfig, ProviderView, ProvidersInfo, Role, ProjectTemplate, ProjectSpend, BacklogItem, Project, PullRequestRow, Review, ReviewComment, Run, RunEvent, SecretInfo, Ticket, TicketStatus } from './models';
 
 export class ApiError extends Error {
-  constructor(message: string, readonly status: number, readonly reasons: string[] = []) {
+  constructor(message: string, readonly status: number, readonly reasons: string[] = [], readonly code?: string) {
     super(message);
   }
 }
@@ -16,9 +16,20 @@ export class Api {
       body: body === undefined ? undefined : JSON.stringify(body),
     });
     const data = res.headers.get('content-type')?.includes('json') ? await res.json() : undefined;
-    if (!res.ok) throw new ApiError(data?.error ?? res.statusText, res.status, data?.reasons ?? []);
+    if (!res.ok) {
+      // A lost session or a required password change sends the app to the right page (see Session).
+      if (res.status === 401 && !path.startsWith('/auth/')) window.dispatchEvent(new CustomEvent('maestro:unauthorized'));
+      if (res.status === 403 && data?.code === 'password_change_required') window.dispatchEvent(new CustomEvent('maestro:password-required'));
+      throw new ApiError(data?.error ?? res.statusText, res.status, data?.reasons ?? [], data?.code);
+    }
     return data as T;
   }
+
+  authStatus = () => this.call<{ setupNeeded: boolean; user: SessionUser | null }>('GET', '/auth/status');
+  login = (email: string, password: string) => this.call<{ user: SessionUser }>('POST', '/auth/login', { email, password });
+  setup = (account: { email: string; name: string; password: string }) => this.call<{ user: SessionUser }>('POST', '/auth/setup', account);
+  logout = () => this.call('POST', '/auth/logout', {});
+  changePassword = (current: string, next: string) => this.call<{ user: SessionUser }>('POST', '/auth/password', { current, next });
 
   projects = () => this.call<Project[]>('GET', '/projects');
   project = (id: string) => this.call<Project>('GET', `/projects/${id}`);

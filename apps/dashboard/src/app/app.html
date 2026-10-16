@@ -1,3 +1,4 @@
+@if (session.signedIn()) {
 <div class="shell">
   <aside class="nav" aria-label="Main">
     <div class="brand"><span class="brand-mark" aria-hidden="true">M</span><span class="brand-name">Maestro</span></div>
@@ -11,6 +12,22 @@
     <button type="button" class="nav-chat" (click)="summon()" aria-label="Ask Maestro" [attr.aria-expanded]="dock.drawer() || (onDashboard() && dock.state() === 'open')">
       <app-icon name="chat" /><span class="nav-label">Ask Maestro</span>
     </button>
+    @if (session.user(); as u) {
+      <div class="user-menu">
+        <button type="button" class="user-chip" (click)="menuOpen.set(!menuOpen())" [attr.aria-expanded]="menuOpen()" aria-controls="user-menu" [attr.aria-label]="'Account: ' + u.name">
+          <span class="avatar" aria-hidden="true">{{ initials(u.name) }}</span>
+          <span class="nav-label user-chip-text"><strong>{{ u.name }}</strong><small>{{ roleText(u.roles) }}</small></span>
+        </button>
+        @if (menuOpen()) {
+          <div class="user-pop" id="user-menu">
+            <p class="user-pop-head"><strong>{{ u.name }}</strong><span class="hint">{{ u.email }}</span></p>
+            <p class="role-badges">@for (r of u.roles; track r) { <span class="pill role-{{ r }}">{{ roleLabel[r] }}</span> }</p>
+            <a routerLink="/password" (click)="menuOpen.set(false)">Change password</a>
+            <button type="button" class="link-btn" (click)="menuOpen.set(false); session.logout()">Log out</button>
+          </div>
+        }
+      </div>
+    }
     <div class="nav-foot">
       <p class="conn" [class.on]="live.connected()"><span class="nav-label">{{ live.connected() ? 'Engine connected' : 'Engine offline' }}</span></p>
       <button class="icon-btn" (click)="theme.cycle()" [attr.aria-label]="'Theme: ' + theme.theme()" [title]="'Theme: ' + theme.theme()">
@@ -22,10 +39,13 @@
     <router-outlet />
   </main>
 </div>
-@if (showLauncher()) {
+} @else {
+  <router-outlet />
+}
+@if (session.signedIn() && showLauncher()) {
   <button type="button" class="chat-launcher" (click)="summon()" aria-label="Ask Maestro" title="Ask Maestro"><app-icon name="chat" [size]="22" /></button>
 }
-@if (dock.drawer()) {
+@if (session.signedIn() && dock.drawer()) {
   <div class="chat-drawer-backdrop" (click)="dock.drawer.set(false)" aria-hidden="true"></div>
   <aside class="chat-drawer" role="dialog" aria-modal="true" aria-label="Ask Maestro">
     <app-chat-panel [projects]="projects()" [initialScope]="pageProject()" [canClose]="true" (closed)="dock.drawer.set(false)" />

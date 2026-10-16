@@ -116,6 +116,19 @@ docker compose down       # stop (data stays)
 - **Outbound calls** time out: 30 seconds for APIs (code hosts, PM tools, Figma, Confluence, model lists) and 15 minutes for a model's reply.
 - **Image**: the Node base image is pinned by digest in the `Dockerfile` (`NODE_IMAGE`); the image installs only production dependencies and runs as a non-root user under `tini`.
 
+## Accounts
+
+- **First run**: Maestro opens a setup page. The account you create there gets the Project Manager and Tech Lead roles and owns everything made before accounts existed.
+- **Login**: email and password. Passwords are hashed with scrypt (at least 12 characters). A session lasts 7 days without use and 30 days at most; the cookie is `HttpOnly`, `SameSite=Strict`, and `Secure` over HTTPS. 5 wrong passwords lock an account for 15 minutes, and each address gets 30 tries per 15 minutes.
+- **Passwords**: change yours from the user menu (your other browsers are logged out). A one-time password must be replaced at the next login.
+- **Locked out?** On the machine running Maestro:
+
+  ```bash
+  docker compose exec maestro npm run user:reset -- you@example.com
+  ```
+
+  It prints a one-time password and ends that account's sessions. Outside Docker: `npm --prefix apps/engine run user:reset -- you@example.com`.
+
 ## First steps
 
 1. Open **Settings** and add your Anthropic API key (skip this if you use Claude Code's login), plus the tokens for your code host and PM tool. Set budgets, and turn on desktop notifications if you want them.

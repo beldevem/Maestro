@@ -389,3 +389,15 @@ export interface DirListing {
   branch: string | null;
   truncated: boolean;
 }
+
+export type UserRole = 'pm' | 'lead' | 'dev';
+export const USER_ROLE_LABEL: Record<UserRole, string> = { pm: 'Project Manager', lead: 'Tech Lead', dev: 'Developer' };
+
+/** The logged-in user. */
+export interface SessionUser {
+  id: string;
+  email: string;
+  name: string;
+  roles: UserRole[];
+  mustChangePassword: boolean;
+}
