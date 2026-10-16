@@ -133,6 +133,10 @@ docker compose down       # stop (data stays)
   | Users, roles, project members | Yes | No | No |
 
   The engine checks every request against this table; the dashboard also hides what you can't do.
+- **People and projects**: Project Managers add people on the **Users** page (a one-time password is shown once; the person picks their own at first login), set roles, reset passwords and delete (deactivate) accounts; Maestro always keeps one Project Manager. Each project's **Members** tab says who can see it. Chat conversations are private.
+- **Activity**: every change is recorded with the person behind it (never a secret's value); the **Activity** page filters by person, project, action and dates. Project Managers and Tech Leads see everyone's activity in their projects, Developers their own.
+- **Usage by person**: tokens are credited to whoever started the run or asked the chat (the reviewer agent counts as Maestro). The Dashboard and Metrics show usage per person, and a Tech Lead can set a daily token budget per person in Settings.
+- **Sharing with a team**: Maestro still listens on 127.0.0.1 only. To let others in, put it behind HTTPS (a reverse proxy such as Caddy, or a tunnel) and add its host name to `MAESTRO_ALLOWED_HOSTS`; the session cookie is marked `Secure` when served over HTTPS.
 - **Locked out?** On the machine running Maestro:
 
   ```bash

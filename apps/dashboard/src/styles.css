@@ -556,3 +556,8 @@ input[aria-invalid='true'] { border-color: var(--bad); }
 .user-card-who { display: flex; flex-direction: column; min-width: 0; }
 .user-card-who .hint { margin: 0; overflow-wrap: anywhere; }
 .user-card.inactive { opacity: 0.7; }
+@media (max-width: 760px) {
+  /* Phones: only the avatar in the top bar; the menu opens under it, inside the screen. */
+  .nav .user-chip-text { display: none; }
+  .user-pop { position: fixed; top: 56px; right: 8px; left: auto; bottom: auto; max-width: calc(100vw - 16px); }
+}

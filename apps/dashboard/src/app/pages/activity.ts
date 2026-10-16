@@ -65,7 +65,7 @@ const KINDS = [
               <td>{{ label(e.action) }}@if (note(e); as n) { <span class="meta"> · {{ n }}</span> }</td>
               <td>
                 @if (e.targetType === 'run' && e.targetId) { <a [routerLink]="['/runs', e.targetId]">Run</a> }
-                @else { {{ e.targetType === 'ticket' || e.targetType === 'secret' || e.targetType === 'connection' ? e.targetId : (e.targetType ?? '') }} }
+                @else if (e.targetId && (e.targetType === 'ticket' || e.targetType === 'secret' || e.targetType === 'connection' || e.targetType === 'provider')) { {{ e.targetId }} }
               </td>
               <td>@if (e.projectId && e.projectName) { <a [routerLink]="['/projects', e.projectId]">{{ e.projectName }}</a> }</td>
             </tr>
